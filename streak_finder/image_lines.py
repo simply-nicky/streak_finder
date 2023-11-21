@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterator, List, NamedTuple, Optional, Set, Tuple, Union
+from copy import deepcopy
 import numpy as np
 from scipy.ndimage import binary_dilation
 from scipy.special import loggamma
@@ -210,7 +211,7 @@ class Line(NamedTuple):
         pixels = PixelSet(set(zip(self.pixels.x[mask], self.pixels.y[mask], self.pixels.val[mask])))
         return Line(LinePixels.new(pixels), self.linelets, self.bounds)
 
-    def update_bounds(self) -> Line:
+    def update_bounds(self, image: Image) -> Line:
         mx = self.pixels.moments.mu_x / self.pixels.moments.mu
         my = self.pixels.moments.mu_y / self.pixels.moments.mu
         mxx = self.pixels.moments.mu_xx / self.pixels.moments.mu - mx**2
@@ -222,7 +223,8 @@ class Line(NamedTuple):
 
         x0, y0 = mx + self.pixels.x0, my + self.pixels.y0
         taus = (self.pixels.x - x0) * np.cos(theta) + (self.pixels.y - y0) * np.sin(theta)
-        tmin, tmax = np.min(taus), np.max(taus)
+        mask = image.is_inbound(x0 + taus * np.cos(theta), y0 + taus * np.sin(theta))
+        tmin, tmax = np.min(taus[mask]), np.max(taus[mask])
 
         bounds = LineBounds(x0 + tmin * np.cos(theta), y0 + tmin * np.sin(theta),
                             x0 + tmax * np.cos(theta), y0 + tmax * np.sin(theta))
@@ -281,35 +283,15 @@ class Structure(NamedTuple):
         krn[self.idxs[:, 1] + self.radius, self.idxs[:, 0] + self.radius] = self.idxs[:, 1]**2
         return krn
 
-class Array(NamedTuple):
-    data    : np.ndarray
-
-    @property
-    def shape(self) -> Tuple[int, ...]:
-        return self.data.shape
-
-    @property
-    def size(self) -> int:
-        return self.data.size
-
-    def __getitem__(self, indices: Any) -> Any:
-        return self.data[indices]
-
-    def get(self, x: np.ndarray, y: np.ndarray, default: float=0.0) -> np.ndarray:
-        out = np.full(np.array(x).shape, default, dtype=self.data.dtype)
-        mask = (x < self.shape[1]) & (x >= 0) & (y < self.shape[0]) & (y >= 0)
-        out[mask] = self.data[np.array(y)[mask], np.array(x)[mask]]
-        return out
-
 class Image(NamedTuple):
-    data    : Array
+    data    : np.ndarray
     struct  : Structure
-    mu      : Array
-    mu_x    : Array
-    mu_y    : Array
-    mu_xx   : Array
-    mu_xy   : Array
-    mu_yy   : Array
+    mu      : np.ndarray
+    mu_x    : np.ndarray
+    mu_y    : np.ndarray
+    mu_xx   : np.ndarray
+    mu_xy   : np.ndarray
+    mu_yy   : np.ndarray
 
     @classmethod
     def new(cls, data: np.ndarray, struct: Structure) -> Image:
@@ -319,8 +301,8 @@ class Image(NamedTuple):
         mu_xx = fft_convolve(data, struct.kxx)
         mu_xy = fft_convolve(data, struct.kxy)
         mu_yy = fft_convolve(data, struct.kyy)
-        return cls(Array(data), struct, Array(mu), Array(mu_x), Array(mu_y),
-                   Array(mu_xx), Array(mu_xy), Array(mu_yy))
+        return cls(data=data, struct=struct, mu=mu, mu_x=mu_x,
+                   mu_y=mu_y, mu_xx=mu_xx, mu_xy=mu_xy, mu_yy=mu_yy)
 
     @property
     def radius(self) -> int:
@@ -338,8 +320,11 @@ class Image(NamedTuple):
     def coordinates(self) -> Tuple[np.ndarray, np.ndarray]:
         return np.arange(0, self.shape[0]), np.arange(0, self.shape[1])
 
-    def background_level(self) -> float:
-        return median(self.data[()], mask=(self.data[()] > 0.0), axis=(0, 1))
+    def is_inbound(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        return (x < self.shape[1]) & (x >= 0) & (y < self.shape[0]) & (y >= 0)
+
+    def background_level(self, mask: Optional[np.ndarray]=None) -> float:
+        return median(self.data, mask=mask, axis=(0, 1))
 
     def theta(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
         mx = self.mu_x[y, x] / self.mu[y, x]
@@ -353,43 +338,23 @@ class Image(NamedTuple):
 
     def update(self, x: np.ndarray, y: np.ndarray, vals: np.ndarray):
         xx, yy = x[:, None] + self.struct.idxs[:, 0], y[:, None] + self.struct.idxs[:, 1]
-        mask = (xx < self.shape[1]) & (xx >= 0) & (yy < self.shape[0]) & (yy >= 0)
+        mask = self.is_inbound(xx, yy)
         vals = (self.data[y, x] * vals)
 
-        np.subtract.at(self.data.data, (y, x), vals)
-        np.subtract.at(self.mu.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.data, (y, x), vals)
+        np.subtract.at(self.mu, (yy[mask], xx[mask]),
                        np.broadcast_to(vals[:, None], mask.shape)[mask])
-        np.subtract.at(self.mu_x.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.mu_x, (yy[mask], xx[mask]),
                        (-self.struct.idxs[:, 0] * vals[:, None])[mask])
-        np.subtract.at(self.mu_y.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.mu_y, (yy[mask], xx[mask]),
                        (-self.struct.idxs[:, 1] * vals[:, None])[mask])
 
-        np.subtract.at(self.mu_xx.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.mu_xx, (yy[mask], xx[mask]),
                        (self.struct.idxs[:, 0]**2 * vals[:, None])[mask])
-        np.subtract.at(self.mu_xy.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.mu_xy, (yy[mask], xx[mask]),
                        (self.struct.idxs[:, 0] * self.struct.idxs[:, 1] * vals[:, None])[mask])
-        np.subtract.at(self.mu_yy.data, (yy[mask], xx[mask]),
+        np.subtract.at(self.mu_yy, (yy[mask], xx[mask]),
                        (self.struct.idxs[:, 1]**2 * vals[:, None])[mask])
-
-def distance_to_streak(line: Line, x: np.ndarray, y: np.ndarray) -> np.ndarray:
-    vec0 = np.stack([line.bounds.x0 - x, line.bounds.y0 - y], axis=-1)
-
-    if np.sum(line.bounds.tau**2):
-        vec1 = np.stack([line.bounds.x1 - x, line.bounds.y1 - y], axis=-1)
-
-        mag0 = np.sum(vec0**2, axis=-1, keepdims=True)
-        mag1 = np.sum(vec1**2, axis=-1, keepdims=True)
-
-        prd0 = np.sum(vec0 * line.bounds.tau, axis=-1, keepdims=True)
-        prd1 = np.sum(vec1 * line.bounds.tau, axis=-1, keepdims=True)
-
-        dist = np.where(mag0 < mag1,
-                        vec0 - (prd0 / line.bounds.magnitude) * line.bounds.tau,
-                        vec1 - (prd1 / line.bounds.magnitude) * line.bounds.tau)
-        return np.where(prd0 * prd1 < 0.0, dist,
-                        np.where(mag0 < mag1, vec0, vec1))
-
-    return vec0
 
 def distance_to_line(line: Line, x: np.ndarray, y: np.ndarray) -> np.ndarray:
     vec0 = np.stack([line.bounds.x0 - x, line.bounds.y0 - y], axis=-1)
@@ -410,19 +375,8 @@ def distance_to_line(line: Line, x: np.ndarray, y: np.ndarray) -> np.ndarray:
 
     return vec0
 
-def project_to_line(line: Line, x: np.ndarray, y: np.ndarray, tau: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    if line.bounds.magnitude:
-        vec = np.stack([x - line.bounds.x0, y - line.bounds.y0], axis=-1)
-        norm = np.stack((tau[..., 1], -tau[..., 0]), axis=-1)
-        prd1 = np.sum(vec * line.bounds.norm, axis=-1)
-        prd2 = np.sum(line.bounds.tau * norm, axis=-1)
-        t = np.where((prd1 / prd2 > 0) & (prd1 / prd2 < 1e3), prd1 / prd2, 0)
-        return x + t * tau[..., 0], y + t * tau[..., 1]
-
-    return line.bounds.x0 * np.ones(x.shape), line.bounds.y0 * np.ones(x.shape)
-
 def get_bounds(x: int, y: int, pixels: PixelSet, image: Image) -> LineBounds:
-    if image.mu.get(x, y):
+    if image.mu[y, x]:
         x0 = image.mu_x[y, x] / image.mu[y, x] + x
         y0 = image.mu_y[y, x] / image.mu[y, x] + y
         theta = image.theta(x, y)
@@ -443,7 +397,10 @@ def get_bounds(x: int, y: int, pixels: PixelSet, image: Image) -> LineBounds:
 
 def generate_line(x: int, y: int, image: Image, indices: np.ndarray) -> Line:
     xx, yy = x + indices[:, 0], y + indices[:, 1]
-    vals = image.data.get(xx, yy)
+    mask = image.is_inbound(xx, yy)
+    xx, yy = xx[mask], yy[mask]
+
+    vals = image.data[yy, xx]
     pixels = LinePixels.new(PixelSet(set(zip(xx, yy, vals))))
     bounds = get_bounds(x, y, pixels.pixels, image)
     return Line(pixels, BoundList([bounds,]), bounds)
@@ -454,14 +411,15 @@ def add_line(line: Line, new_line: Line) -> Line:
     return Line(pixels, seeds, line.bounds)
 
 def grow_step(x: int, y: int, line: Line, image: Image,xtol: float, vmin: float) -> Line:
-    new_line = generate_line(x, y, image, image.struct.idxs)
-    vec = distance_to_line(line, new_line.bounds.x, new_line.bounds.y)
-    dist = np.sqrt(np.sum(vec**2, axis=-1))
-    lval = image.data.get(int(np.round(new_line.pixels.x0)),
-                          int(np.round(new_line.pixels.y0)))
+    if image.is_inbound(x, y):
+        new_line = generate_line(x, y, image, image.struct.idxs)
+        vec = distance_to_line(line, new_line.bounds.x, new_line.bounds.y)
+        dist = np.sqrt(np.sum(vec**2, axis=-1))
+        lval = image.data[int(np.round(new_line.pixels.y0)),
+                          int(np.round(new_line.pixels.x0))]
 
-    if new_line.bounds.magnitude > 0 and np.all(dist < xtol) and lval > vmin:
-        return add_line(line, new_line)
+        if new_line.bounds.magnitude > 0 and np.all(dist < xtol) and lval > vmin:
+            return add_line(line, new_line)
     return line
 
 def region_grow(x: int, y: int, image: Image, max_iter: int, xtol: float, vmin: float, lookahead: int=1) -> Line:
@@ -487,7 +445,7 @@ def region_grow(x: int, y: int, image: Image, max_iter: int, xtol: float, vmin: 
         if fline.linelets.size == line.linelets.size:
             break
 
-        line = fline.update_bounds()
+        line = fline.update_bounds(image)
 
     return line
 
@@ -531,13 +489,14 @@ class DetState():
         return cls([], np.stack((x[mask], y[mask]), axis=-1), np.zeros(image.shape, dtype=bool))
 
     @classmethod
-    def new_sparse(cls, image: Image, vmin: Optional[float]=None, axis: int=0) -> DetState:
+    def new_sparse(cls, image: Image, vmin: Optional[float]=None, mask: Optional[np.ndarray]=None,
+                   axis: int=0) -> DetState:
         if vmin is None:
-            bgd_lvl = image.background_level()
-            vmin = np.mean(image.data[image.mu[()] > bgd_lvl * image.struct.size])
+            bgd_lvl = image.background_level(mask=mask)
+            vmin = np.mean(image.data[image.mu > bgd_lvl * image.struct.size])
 
         idxs = np.arange(0, image.shape[1 - axis], image.radius)
-        lines = np.take(image.data[()], idxs, axis=1 - axis)
+        lines = np.take(image.data, idxs, axis=1 - axis)
         peaks = local_maxima(lines, axis=axis)[:, ::-1]
         peaks[:, axis] *= image.radius
         peaks = peaks[image.mu[peaks[:, 1], peaks[:, 0]] > vmin * image.struct.size]
@@ -570,18 +529,20 @@ class DetState():
 
 def find_streaks(image: Image, state: DetState, xtol: float, log_eps: float=np.log(1e-1), n_grow: int=100,
                  lookahead: int=1, min_size: int=5) -> DetState:
-    bgd_lvl = image.background_level()
-    with tqdm(state, desc="Detecting lines",
+    new_image, new_state = deepcopy(image), deepcopy(state)
+    bgd_lvl = new_image.background_level()
+    with tqdm(new_state, desc="Detecting lines",
               bar_format='{desc}: {n_fmt} checked{postfix} [{elapsed}, {rate_fmt}]') as pbar:
         for x, y in pbar:
-            pbar.set_postfix_str(f"{len(state.lines)} detected")
-            line = region_grow(x, y, image, n_grow, xtol, bgd_lvl, lookahead)
-            x, y, val = draw_line_table(line.bounds.to_line(2 * image.radius + 1),
-                                        image.shape, profile='tophat')
-            state.update(x[val > 0.0], y[val > 0.0])
-            if log_nfa(line, xtol, min_size, xtol / (image.radius + 0.5)) < log_eps:
+            pbar.set_postfix_str(f"{len(new_state.lines)} detected")
+            line = region_grow(x, y, new_image, n_grow, xtol, bgd_lvl, lookahead)
+            x, y, val = draw_line_table(line.bounds.to_line(2 * new_image.radius + 1),
+                                        new_image.shape, profile='tophat')
+            mask = image.is_inbound(x, y) & (val > 0.0)
+            new_state.update(x[mask], y[mask])
+            if log_nfa(line, xtol, min_size, xtol / (new_image.radius + 0.5)) < log_eps:
                 shrinked = line.shrink(1.0)
                 if shrinked.pixels.moments.mu > bgd_lvl * shrinked.pixels.size:
-                    image.update(x, y, val)
-                    state.lines.append(line)
-    return state
+                    new_image.update(x, y, val)
+                    new_state.lines.append(line)
+    return new_state

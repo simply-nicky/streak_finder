@@ -1,0 +1,15 @@
+name: streak_finder
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - cxx-compiler
+  - fftw
+  - h5py
+  - hdf5plugin
+  - llvm-openmp
+  - numpy
+  - pybind11
+  - python>=3.7
+  - scipy
+  - tqdm

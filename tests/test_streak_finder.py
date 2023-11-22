@@ -2,7 +2,7 @@ from typing import Dict, Tuple, Union
 import pytest
 import numpy as np
 from streak_finder import Structure, Image, DetState, find_streaks
-from streak_finder.src import draw_line_image, median_filter, robust_mean
+from streak_finder.src import draw_line_image, median_filter, robust_mean, robust_lsq
 
 def generate_image(Y: int, X: int, n_lines: int, length: float, width: float) -> np.ndarray:
     lengths = length * np.random.rand(n_lines)
@@ -67,3 +67,10 @@ def test_robust_mean(shape: Tuple[int, ...]):
     mask = np.random.randint(0, 1, shape).astype(bool)
     out = robust_mean(inp, mask=mask, axis=0)
     assert np.all(np.array(inp.shape[1:]) == np.array(out.shape))
+
+@pytest.mark.src
+def test_robust_lsq(shape: Tuple[int, ...]):
+    y = np.random.rand(*shape)
+    W = np.random.rand(*shape[1:])
+    x = robust_lsq(W=W, y=y, axis=np.arange(1, len(shape)))
+    assert np.all(np.array(x.shape) == np.array([shape[0], 1]))

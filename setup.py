@@ -1,18 +1,18 @@
 import os
 import sys
 from setuptools import setup, find_namespace_packages
-from pybind11.setup_helpers import Pybind11Extension
+from pybind11.setup_helpers import Pybind11Extension, build_ext
 import numpy
 
 __version__ = '1.0.0'
 
-extension_args = {'extra_compile_args': ['-fopenmp', '-std=c++17'],
+extension_args = {'extra_compile_args': ['-fopenmp'],
                   'extra_link_args': ['-lgomp'],
                   'library_dirs': ['/usr/local/lib',
                                    os.path.join(sys.prefix, 'lib')],
                   'include_dirs': [numpy.get_include(),
                                    os.path.join(sys.prefix, 'include'),
-                                   os.path.join(os.path.dirname(__file__), 'cbclib/include')]}
+                                   os.path.join(os.path.dirname(__file__), 'streak_finder/src')]}
 
 extensions = [Pybind11Extension("streak_finder.src.fft_functions",
                                 sources=["streak_finder/src/fft_functions.cpp"],
@@ -32,6 +32,7 @@ with open('README.md', 'r') as readme:
     long_description = readme.read()
 
 setup(name='streak_finder',
+      cmdclass={"build_ext": build_ext},
       version=__version__,
       author='Nikolay Ivanov',
       author_email="nikolay.ivanov@desy.de",

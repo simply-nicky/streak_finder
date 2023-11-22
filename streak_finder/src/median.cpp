@@ -248,6 +248,149 @@ auto robust_mean(py::array_t<T, py::array::c_style | py::array::forcecast> inp,
     return out;
 }
 
+template <typename T, typename U>
+auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W,
+                py::array_t<T, py::array::c_style | py::array::forcecast> y,
+                std::optional<py::array_t<bool, py::array::c_style | py::array::forcecast>> mask,
+                U axis, double r0, double r1, int n_iter, double lm, unsigned threads) -> py::array_t<std::common_type_t<T, float>>
+{
+    using D = std::common_type_t<T, float>;
+    assert(PyArray_API);
+
+    check_optional("mask", y, mask, true);
+
+    sequence<long> seq (axis);
+    seq = seq.unwrap(y.ndim());
+    y = seq.swap_axes(y);
+    mask = seq.swap_axes(mask.value());
+
+    py::buffer_info Wbuf = W.request();
+    py::buffer_info ybuf = y.request();
+    auto ax = ybuf.ndim - seq.size();
+    if (!std::equal(std::make_reverse_iterator(ybuf.shape.end()),
+                    std::make_reverse_iterator(ybuf.shape.begin() + ax),
+                    std::make_reverse_iterator(Wbuf.shape.end())))
+    {
+        std::ostringstream oss1, oss2;
+        std::copy(ybuf.shape.begin(), ybuf.shape.end(), std::experimental::make_ostream_joiner(oss1, ", "));
+        std::copy(Wbuf.shape.begin(), Wbuf.shape.end(), std::experimental::make_ostream_joiner(oss2, ", "));
+        throw std::invalid_argument("W and y arrays have incompatible shapes: {" + oss1.str() + 
+                                    "}, {" + oss2.str() + "}");
+    }
+
+    if (!ybuf.size || !Wbuf.size)
+        throw std::invalid_argument("W and y must have a positive size");
+
+    auto new_shape = std::vector<py::ssize_t>(ybuf.shape.begin(), std::next(ybuf.shape.begin(), ax));
+    auto repeats = get_size(new_shape.begin(), new_shape.end());
+    new_shape.push_back(ybuf.size / repeats);
+
+    y = y.reshape(new_shape);
+    mask = mask.value().reshape(new_shape);
+
+    auto nf = Wbuf.size / new_shape[ax];
+    W = W.reshape({nf, new_shape[ax]});
+
+    auto out_shape = std::vector<py::ssize_t>(new_shape.begin(), std::prev(new_shape.end()));
+    out_shape.push_back(nf);
+    auto out = py::array_t<D>(out_shape);
+
+    auto oarr = array<D>(out.request());
+    auto Warr = array<T>(W.request());
+    auto yarr = array<T>(y.request());
+    auto marr = array<bool>(mask.value().request());
+
+    thread_exception e;
+
+    py::gil_scoped_release release;
+
+    threads = (threads > repeats) ? repeats : threads;
+
+    auto get_x = [](std::pair<T, T> p) -> D {return (p.second > T()) ? static_cast<D>(p.first) / p.second : D();};
+    auto sum_pairs = [](std::pair<T, T> p1, std::pair<T, T> p2){return std::make_pair(p1.first + p2.first, p1.second + p2.second);};
+
+    #pragma omp parallel num_threads(threads)
+    {
+        std::vector<std::pair<T, T>> sums (oarr.shape[ax]);
+
+        std::vector<D> err (yarr.shape[ax]);
+        std::vector<size_t> idxs (yarr.shape[ax]);
+
+        size_t j0 = r0 * yarr.shape[ax], j1 = r1 * yarr.shape[ax];
+
+        #pragma omp for
+        for (size_t i = 0; i < repeats; i++)
+        {
+            e.run([&]
+            {
+                auto yiter = yarr.line_begin(ax, i);
+                auto miter = marr.line_begin(ax, i);
+
+                auto get_err = [=, &sums, &Warr](size_t idx) -> D
+                {
+                    D err = miter[idx] * yiter[idx];
+                    auto Witer = Warr.line_begin(0, idx);
+                    for (size_t k = 0; k < sums.size(); k++) err -= Witer[k] * get_x(sums[k]);
+                    return miter[idx] * err * err;
+                };
+                auto get_pair = [=, &Warr](size_t k)
+                {
+                    auto Witer = Warr.line_begin(Warr.ndim - 1, k);
+                    auto f = [=](size_t idx)
+                    {
+                        return std::make_pair(miter[idx] * yiter[idx] * Witer[idx], Witer[idx] * Witer[idx]);
+                    };
+                    return f;
+                };
+
+                std::iota(idxs.begin(), idxs.end(), 0);
+                for (size_t k = 0; k < sums.size(); k++)
+                {
+                    sums[k] = std::transform_reduce(idxs.begin(), idxs.end(), std::pair<T, T>(), sum_pairs, get_pair(k));
+                }
+
+                for (int n = 0; n < n_iter; n++)
+                {
+                    std::iota(idxs.begin(), idxs.end(), 0);
+                    std::transform(idxs.begin(), idxs.end(), err.begin(), get_err);
+                    std::sort(idxs.begin(), idxs.end(), [&err](size_t i1, size_t i2){return err[i1] < err[i2];});
+
+                    for (size_t k = 0; k < sums.size(); k++)
+                    {
+                        sums[k] = std::transform_reduce(idxs.begin() + j0, idxs.begin() + j1, std::pair<T, T>(), sum_pairs, get_pair(k));
+                    }
+                }
+
+                std::iota(idxs.begin(), idxs.end(), 0);
+                std::transform(idxs.begin(), idxs.end(), err.begin(), get_err);
+                std::sort(idxs.begin(), idxs.end(), [&err](size_t i1, size_t i2){return err[i1] < err[i2];});
+
+                D cumsum = D();
+                std::fill(sums.begin(), sums.end(), std::pair<T, T>());
+                for (size_t j = 0; j < idxs.size(); j++)
+                {
+                    if (lm * cumsum > j * err[idxs[j]])
+                    {
+                        auto Witer = Warr.line_begin(0, idxs[j]);
+                        for (size_t k = 0; k < sums.size(); k++)
+                        {
+                            sums[k].first += miter[idxs[j]] * yiter[idxs[j]] * Witer[k];
+                            sums[k].second += Witer[k] * Witer[k];
+                        }
+                    }
+                    cumsum += err[idxs[j]];
+                }
+                
+                std::transform(sums.begin(), sums.end(), oarr.line_begin(ax, i), get_x);
+            });
+        }
+    }
+
+    py::gil_scoped_acquire acquire;
+
+    return out;
+}
+
 }
 
 PYBIND11_MODULE(median, m)
@@ -295,5 +438,16 @@ PYBIND11_MODULE(median, m)
     m.def("robust_mean", &robust_mean<long, std::vector<int>>, py::arg("inp"), py::arg("mask") = nullptr, py::arg("axis") = std::vector<int>{-1}, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
     m.def("robust_mean", &robust_mean<size_t, int>, py::arg("inp"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
     m.def("robust_mean", &robust_mean<size_t, std::vector<int>>, py::arg("inp"), py::arg("mask") = nullptr, py::arg("axis") = std::vector<int>{-1}, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+
+    m.def("robust_lsq", &robust_lsq<double, int>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<double, std::vector<int>>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<float, int>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<float, std::vector<int>>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<int, int>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<int, std::vector<int>>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<long, int>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<long, std::vector<int>>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<size_t, int>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
+    m.def("robust_lsq", &robust_lsq<size_t, std::vector<int>>, py::arg("W"), py::arg("y"), py::arg("mask") = nullptr, py::arg("axis") = -1, py::arg("r0") = 0.0, py::arg("r1") = 0.5, py::arg("n_iter") = 12, py::arg("lm") = 9.0, py::arg("num_threads") = 1);
     
 }

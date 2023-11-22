@@ -161,6 +161,11 @@ template <typename T, typename U>
 py::array_t<T> median(py::array_t<T, py::array::c_style | py::array::forcecast> inp,
                       std::optional<py::array_t<bool, py::array::c_style | py::array::forcecast>> mask, U axis, unsigned threads);
 
+template <typename T, typename U>
+auto robust_mean(py::array_t<T, py::array::c_style | py::array::forcecast> inp,
+                 std::optional<py::array_t<bool, py::array::c_style | py::array::forcecast>> mask,
+                 U axis, double r0, double r1, int n_iter, double lm, unsigned threads) -> py::array_t<std::common_type_t<T, float>>;
+
 }
 
 #endif

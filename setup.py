@@ -4,7 +4,7 @@ from setuptools import setup, find_namespace_packages
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 import numpy
 
-__version__ = '1.0.0'
+__version__ = '1.0.1'
 
 extension_args = {'extra_compile_args': ['-fopenmp'],
                   'extra_link_args': ['-lgomp'],
@@ -41,4 +41,5 @@ setup(name='streak_finder',
       packages=find_namespace_packages(),
       install_requires=['numpy', 'scipy'],
       ext_modules=extensions,
+      extras_require={"test": "pytest"},
       python_requires='>=3.7')

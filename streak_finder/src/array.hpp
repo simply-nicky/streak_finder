@@ -231,6 +231,8 @@ public:
     using iterator = T *;
     using const_iterator = const T *;
 
+    array() : array({}, nullptr) {}
+
     array(size_t ndim, size_t size, ShapeContainer shape, ShapeContainer strides, T * ptr)
         : shape_handler(ndim, size, std::move(shape), std::move(strides)), ptr(ptr) {}
 

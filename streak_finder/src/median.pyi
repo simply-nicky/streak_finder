@@ -78,7 +78,8 @@ def median_filter(inp: np.ndarray, size: Optional[IntArray]=None,
     ...
 
 def robust_mean(inp: np.ndarray, mask: Optional[np.ndarray]=None, axis: IntArray=0, r0: float=0.0,
-                r1: float=0.5, n_iter: int=12, lm: float=9.0, num_threads: int=1) -> np.ndarray:
+                r1: float=0.5, n_iter: int=12, lm: float=9.0, return_std: bool=False,
+                num_threads: int=1) -> np.ndarray:
     """Calculate a mean along the `axis` by robustly fitting a Gaussian to input vector [RFG]_.
     The algorithm performs `n_iter` times the fast least kth order statistics (FLkOS [FLKOS]_)
     algorithm to fit a gaussian to data.
@@ -94,6 +95,7 @@ def robust_mean(inp: np.ndarray, mask: Optional[np.ndarray]=None, axis: IntArray
         n_iter : Number of iterations of fitting a gaussian with the FLkOS algorithm.
         lm : How far (normalized by STD of the Gaussian) from the mean of the Gaussian, data is
             considered inlier.
+        return_std : Return robust estimate of standard deviation if True.
         num_threads : Number of threads used in the calculations.
 
     Raises:

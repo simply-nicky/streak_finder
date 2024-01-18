@@ -34,9 +34,8 @@ auto fft_convolve(py::array_t<Inp> inp, py::array_t<Krn> kernel, std::optional<S
             throw std::invalid_argument("inp and kernel have different numbers of dimensions: " +
                                         std::to_string(inp.ndim()) + " and " + std::to_string(kernel.ndim()));
 
-        std::vector<long> vec (inp.ndim(), 0);
-        std::iota(vec.begin(), vec.end(), 0);
-        seq = std::move(vec);
+        seq->resize(inp.ndim());
+        std::iota(seq->begin(), seq->end(), 0);
     }
     else seq = axis.value();
 
@@ -53,14 +52,15 @@ auto fft_convolve(py::array_t<Inp> inp, py::array_t<Krn> kernel, std::optional<S
     auto oarr = array<Out>(out.request());
 
     auto ax = iarr.ndim - seq.size();
+    std::vector<size_t> ishape (std::next(iarr.shape.begin(), ax), iarr.shape.end());
     std::vector<size_t> axes (seq.size());
     std::iota(axes.begin(), axes.end(), ax);
     auto repeats = get_size(iarr.shape.begin(), std::next(iarr.shape.begin(), ax));
     threads = (threads > repeats) ? repeats : threads;
 
     std::vector<size_t> fshape;
-    std::transform(karr.shape.begin(), karr.shape.end(), std::next(iarr.shape.begin(), ax),
-                   std::back_inserter(fshape), [](size_t nk, size_t ni){return next_fast_len(nk + ni);});
+    std::transform(karr.shape.begin(), karr.shape.end(), ishape.begin(), std::back_inserter(fshape),
+                   [](size_t nk, size_t ni){return next_fast_len(nk + ni);});
     auto bshape = fftw_buffer_shape<Out>(fshape);
 
     Out factor = 1.0 / get_size(fshape.begin(), fshape.end());
@@ -70,9 +70,10 @@ auto fft_convolve(py::array_t<Inp> inp, py::array_t<Krn> kernel, std::optional<S
     py::gil_scoped_release release;
 
     vector_array<Out> kbuffer (bshape);
-    write_buffer(kbuffer, fshape, std::move(karr));
-    auto kbuf_inp = kbuffer.ptr;
-    auto kbuf_out = reinterpret_cast<std::complex<remove_complex_t<Out>> *>(kbuffer.ptr);
+    write_buffer(kbuffer, karr, fshape, write_origin(fshape, karr.shape));
+
+    auto kbuf_inp = kbuffer.data();
+    auto kbuf_out = reinterpret_cast<std::complex<remove_complex_t<Out>> *>(kbuffer.data());
 
     auto fwd_plan = make_forward_plan(fshape, kbuf_inp, kbuf_out);
     auto bwd_plan = make_backward_plan(fshape, kbuf_out, kbuf_inp);
@@ -83,20 +84,23 @@ auto fft_convolve(py::array_t<Inp> inp, py::array_t<Krn> kernel, std::optional<S
     {
         vector_array<Out> ibuffer (bshape);
 
-        auto ibuf_inp = ibuffer.ptr;
-        auto ibuf_out = reinterpret_cast<std::complex<remove_complex_t<Out>> *>(ibuffer.ptr);
+        auto ibuf_inp = ibuffer.data();
+        auto ibuf_out = reinterpret_cast<std::complex<remove_complex_t<Out>> *>(ibuffer.data());
         auto buf_size = is_complex_v<Out> ? ibuffer.size : ibuffer.size / 2;
+
+        auto worg = write_origin(fshape, ishape);
+        auto rorg = read_origin(fshape, ishape);
 
         #pragma omp for
         for (size_t i = 0; i < repeats; i++)
         {
             e.run([&]
             {
-                write_buffer(ibuffer, fshape, iarr.slice(i, axes));
+                write_buffer(ibuffer, iarr.slice(i, axes), fshape, worg);
                 fftw_execute(fwd_plan, ibuf_inp, ibuf_out);
                 for (size_t j = 0; j < buf_size; j++) ibuf_out[j] *= kbuf_out[j] * factor;
                 fftw_execute(bwd_plan, ibuf_out, ibuf_inp);
-                read_buffer(ibuffer, fshape, oarr.slice(i, axes));
+                read_buffer(ibuffer, oarr.slice(i, axes), fshape, rorg);
             });
         }
     }

@@ -5,30 +5,20 @@ namespace streak_finder {
 template <typename T>
 void check_lines(array<T> & lines)
 {
-    if (lines.ndim == 1 && lines.size == 5) lines = array<T>({1, 5}, lines.ptr);
+    if (lines.ndim == 1 && lines.size == 5) lines = lines.reshape({1, 5});
     check_dimensions("lines", lines.ndim - 2, lines.shape, lines.size / 5, 5);
-}
-
-template <typename Function>
-void check_shape(const std::vector<size_t> & shape, Function && func)
-{
-    if (std::forward<Function>(func)(shape) || !get_size(shape.begin(), shape.end()))
-    {
-        std::ostringstream oss;
-        std::copy(shape.begin(), shape.end(), std::experimental::make_ostream_joiner(oss, ", "));
-        throw std::invalid_argument("invalid shape: {" + oss.str() + "}");
-    }
 }
 
 template <typename T, typename Out>
 py::array_t<Out> draw_line(py::array_t<T, py::array::c_style | py::array::forcecast> lines,
-                           std::vector<size_t> shape, Out max_val, T dilation, std::string prof, unsigned threads)
+                           std::vector<size_t> shape, Out max_val, T dilation, std::string kernel, unsigned threads)
 {
     assert(PyArray_API);
 
-    auto p = profiles<T>::get_profile(prof);
+    auto krn = kernels<T>::get_kernel(kernel);
 
     check_shape(shape, [](const std::vector<size_t> & shape){return shape.size() != 2;});
+    Point<size_t> ubound {shape[shape.size() - 1] - 1, shape[shape.size() - 2] - 1};
 
     auto larr = array<T>(lines.request());
     check_lines(larr);
@@ -48,7 +38,7 @@ py::array_t<Out> draw_line(py::array_t<T, py::array::c_style | py::array::forcec
         e.run([&]
         {
             auto liter = larr.line_begin(1, j);
-            draw_bresenham(oarr, &oarr.shape, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, p);
+            draw_bresenham(oarr, {oarr.shape[1] - 1, oarr.shape[0] - 1}, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, krn);
         });
     }
 
@@ -61,13 +51,14 @@ py::array_t<Out> draw_line(py::array_t<T, py::array::c_style | py::array::forcec
 
 template <typename T, typename Out>
 py::array_t<Out> draw_line_vec(std::vector<py::array_t<T, py::array::c_style | py::array::forcecast>> lines,
-                               std::vector<size_t> shape, Out max_val, T dilation, std::string prof, unsigned threads)
+                               std::vector<size_t> shape, Out max_val, T dilation, std::string kernel, unsigned threads)
 {
     assert(PyArray_API);
 
-    auto p = profiles<T>::get_profile(prof);
+    auto krn = kernels<T>::get_kernel(kernel);
 
     check_shape(shape, [](const std::vector<size_t> & shape){return shape.size() < 3;});
+    Point<size_t> ubound {shape[shape.size() - 1] - 1, shape[shape.size() - 2] - 1};
 
     if (get_size(shape.begin(), std::prev(shape.end(), 2)) != lines.size())
         throw std::invalid_argument("shape is incompatible with the list of lines");
@@ -99,7 +90,7 @@ py::array_t<Out> draw_line_vec(std::vector<py::array_t<T, py::array::c_style | p
             for (size_t j = 0; j < lvec[i].shape[0]; j++)
             {
                 auto liter = lvec[i].line_begin(1, j);
-                draw_bresenham(frame, &frame.shape, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, p);
+                draw_bresenham(frame, ubound, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, krn);
             }
         });
     }
@@ -113,18 +104,23 @@ py::array_t<Out> draw_line_vec(std::vector<py::array_t<T, py::array::c_style | p
 
 template <typename T, typename Out>
 auto draw_line_table(py::array_t<T, py::array::c_style | py::array::forcecast> lines, std::optional<std::vector<size_t>> shape,
-                     Out max_val, T dilation, std::string prof, unsigned threads)
+                     Out max_val, T dilation, std::string kernel, unsigned threads)
 {
     assert(PyArray_API);
 
-    auto p = profiles<T>::get_profile(prof);
-
-    if (shape) check_shape(shape.value(), [](const std::vector<size_t> & shape){return shape.size() != 2;});
+    auto krn = kernels<T>::get_kernel(kernel);
 
     auto larr = array<T>(lines.request());
     check_lines(larr);
 
-    auto sptr = (shape) ? &shape.value() : nullptr;
+    Point<size_t> ubound;
+    if (shape)
+    {
+        check_shape(shape.value(), [](const std::vector<size_t> & shape){return shape.size() != 2;});
+        ubound.x = shape.value()[shape.value().size() - 1] - 1;
+        ubound.y = shape.value()[shape.value().size() - 2] - 1;
+    }
+    else {ubound.x = INT_MAX; ubound.y = INT_MAX;}
 
     table_t<Out> result;
 
@@ -138,7 +134,7 @@ auto draw_line_table(py::array_t<T, py::array::c_style | py::array::forcecast> l
         e.run([&]
         {
             auto liter = larr.line_begin(1, j);
-            draw_bresenham(result, sptr, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, p);
+            draw_bresenham(result, ubound, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, krn);
         });
     }
 
@@ -153,13 +149,20 @@ auto draw_line_table(py::array_t<T, py::array::c_style | py::array::forcecast> l
 
 template <typename T, typename Out>
 auto draw_line_table_vec(std::vector<py::array_t<T, py::array::c_style | py::array::forcecast>> lines,
-                         std::optional<std::vector<size_t>> shape, Out max_val, T dilation, std::string prof, unsigned threads)
+                         std::optional<std::vector<size_t>> shape, Out max_val, T dilation, std::string kernel, unsigned threads)
 {
     assert(PyArray_API);
 
-    auto p = profiles<T>::get_profile(prof);
+    auto krn = kernels<T>::get_kernel(kernel);
 
-    if (shape) check_shape(shape.value(), [](const std::vector<size_t> & shape){return shape.size() != 2;});
+    Point<size_t> ubound;
+    if (shape)
+    {
+        check_shape(shape.value(), [](const std::vector<size_t> & shape){return shape.size() < 3;});
+        ubound.x = shape.value()[shape.value().size() - 1] - 1;
+        ubound.y = shape.value()[shape.value().size() - 2] - 1;
+    }
+    else {ubound.x = INT_MAX; ubound.y = INT_MAX;}
 
     std::vector<array<T>> lvec;
     for (const auto & obj : lines)
@@ -167,8 +170,6 @@ auto draw_line_table_vec(std::vector<py::array_t<T, py::array::c_style | py::arr
         auto & arr = lvec.emplace_back(obj.request());
         check_lines(arr);
     }
-
-    auto sptr = (shape) ? &shape.value() : nullptr;
 
     std::vector<table_t<Out>> result;
 
@@ -190,7 +191,7 @@ auto draw_line_table_vec(std::vector<py::array_t<T, py::array::c_style | py::arr
                 for (size_t j = 0; j < lvec[i].shape[0]; j++)
                 {
                     auto liter = lvec[i].line_begin(1, j);
-                    draw_bresenham(table, sptr, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, p);
+                    draw_bresenham(table, ubound, {liter[0], liter[1], liter[2], liter[3]}, liter[4] + dilation, max_val, krn);
                 }
             });
         }
@@ -218,9 +219,8 @@ auto draw_line_table_vec(std::vector<py::array_t<T, py::array::c_style | py::arr
 }
 
 template <typename T, typename U>
-py::array_t<T> local_maxima(py::array_t<T, py::array::c_style | py::array::forcecast> inp, U axis, unsigned threads)
+py::array_t<size_t> local_maxima(py::array_t<T, py::array::c_style | py::array::forcecast> inp, U axis, unsigned threads)
 {
-    using iterator = typename array<T>::iterator;
     auto ibuf = inp.request();
 
     sequence<long> seq (axis);
@@ -236,7 +236,7 @@ py::array_t<T> local_maxima(py::array_t<T, py::array::c_style | py::array::force
     auto iarr = array<T>(ibuf);
     size_t repeats = iarr.size / iarr.shape[seq[0]];
     
-    std::vector<T> peaks;
+    std::vector<size_t> peaks;
 
     thread_exception e;
 
@@ -245,53 +245,14 @@ py::array_t<T> local_maxima(py::array_t<T, py::array::c_style | py::array::force
     #pragma omp parallel num_threads(threads)
     {
         std::vector<size_t> buffer;
+        auto add_peak = [&buffer, &iarr](size_t index){iarr.unravel_index(std::back_inserter(buffer), index);};
 
         #pragma omp for schedule(static) nowait
         for (size_t i = 0; i < repeats; i++)
         {
             e.run([&]
             {
-                // First element can't be a maximum
-                auto iter = std::next(iarr.line_begin(seq[0], i));
-                auto last = std::prev(iarr.line_end(seq[0], i));
-                while (iter != last)
-                {
-                    if (*std::prev(iter) < *iter)
-                    {
-                        // ahead can be last
-                        auto ahead = std::next(iter);
-
-                        while (ahead != last && *ahead == *iter) ++ahead;
-
-                        if (*ahead < *iter)
-                        {
-                            std::vector<size_t> peak;
-                            auto index = std::distance(iarr.begin(), static_cast<iterator>(iter));
-                            iarr.unravel_index(std::back_inserter(peak), index);
-
-                            size_t n = 1;
-                            for (; n < seq.size(); n++)
-                            {
-                                if (peak[seq[n]] > 1 && peak[seq[n]] < iarr.shape[seq[n]] - 1)
-                                {
-                                    if (iarr[index - iarr.stride(seq[n])] < *iter && iarr[index + iarr.stride(seq[n])] < *iter)
-                                    {
-                                        continue;
-                                    }
-                                }
-
-                                break;
-                            }
-
-                            if (n == seq.size()) buffer.insert(buffer.end(), std::make_move_iterator(peak.begin()), std::make_move_iterator(peak.end()));
-
-                            // Skip samples that can't be maximum, check if it's not last
-                            if (ahead != last) iter = ahead;
-                        }
-                    }
-
-                    iter = std::next(iter);
-                }
+                maxima1d(iarr.line_begin(seq[0], i), iarr.line_end(seq[0], i), add_peak, iarr, seq);
             });
         }
 
@@ -329,32 +290,32 @@ PYBIND11_MODULE(image_proc, m)
         return;
     }
 
-    m.def("draw_line_mask", &draw_line<double, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_mask", &draw_line_vec<double, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_mask", &draw_line<float, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_mask", &draw_line_vec<float, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    
-    m.def("draw_line_image", &draw_line<float, float>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_image", &draw_line_vec<float, float>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_image", &draw_line<double, double>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_image", &draw_line_vec<double, double>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
+    m.def("draw_line_mask", &draw_line<double, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_mask", &draw_line_vec<double, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_mask", &draw_line<float, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_mask", &draw_line_vec<float, uint32_t>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
 
-    m.def("draw_line_table", &draw_line_table<float, float>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_table", &draw_line_table_vec<float, float>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_table", &draw_line_table<double, double>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
-    m.def("draw_line_table", &draw_line_table_vec<double, double>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("profile") = "tophat", py::arg("num_threads") = 1);
+    m.def("draw_line_image", &draw_line<float, float>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_image", &draw_line_vec<float, float>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_image", &draw_line<double, double>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_image", &draw_line_vec<double, double>, py::arg("lines"), py::arg("shape"), py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+
+    m.def("draw_line_table", &draw_line_table<float, float>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_table", &draw_line_table_vec<float, float>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_table", &draw_line_table<double, double>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
+    m.def("draw_line_table", &draw_line_table_vec<double, double>, py::arg("lines"), py::arg("shape") = std::nullopt, py::arg("max_val") = 1.0, py::arg("dilation") = 0.0, py::arg("kernel") = "rectangular", py::arg("num_threads") = 1);
 
     m.def("local_maxima", &local_maxima<int, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<int, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<long, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
-    m.def("local_maxima", &local_maxima<long, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
+    m.def("local_maxima", &local_maxima<long, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
+    m.def("local_maxima", &local_maxima<unsigned, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<unsigned, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
-    m.def("local_maxima", &local_maxima<unsigned, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
+    m.def("local_maxima", &local_maxima<size_t, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<size_t, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
-    m.def("local_maxima", &local_maxima<size_t, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
+    m.def("local_maxima", &local_maxima<float, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<float, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
-    m.def("local_maxima", &local_maxima<float, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
-    m.def("local_maxima", &local_maxima<double, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
+    m.def("local_maxima", &local_maxima<double, int>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
     m.def("local_maxima", &local_maxima<double, std::vector<int>>, py::arg("inp"), py::arg("axis"), py::arg("num_threads") = 1);
 
 }

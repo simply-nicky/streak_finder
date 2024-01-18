@@ -265,9 +265,10 @@ auto robust_mean(py::array_t<T, py::array::c_style | py::array::forcecast> inp,
 }
 
 template <typename T, typename U>
-auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W, py::array_t<T, py::array::c_style | py::array::forcecast> y,
-                std::optional<py::array_t<bool, py::array::c_style | py::array::forcecast>> mask, U axis, double r0,
-                double r1, int n_iter, double lm, unsigned threads) -> py::array_t<std::common_type_t<T, float>>
+auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W,
+                py::array_t<T, py::array::c_style | py::array::forcecast> y,
+                std::optional<py::array_t<bool, py::array::c_style | py::array::forcecast>> mask,
+                U axis, double r0, double r1, int n_iter, double lm, unsigned threads) -> py::array_t<std::common_type_t<T, float>>
 {
     using D = std::common_type_t<T, float>;
     assert(PyArray_API);
@@ -282,16 +283,9 @@ auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W, py:
     py::buffer_info Wbuf = W.request();
     py::buffer_info ybuf = y.request();
     auto ax = ybuf.ndim - seq.size();
-    if (!std::equal(std::make_reverse_iterator(ybuf.shape.end()),
-                    std::make_reverse_iterator(ybuf.shape.begin() + ax),
-                    std::make_reverse_iterator(Wbuf.shape.end())))
-    {
-        std::ostringstream oss1, oss2;
-        std::copy(ybuf.shape.begin(), ybuf.shape.end(), std::experimental::make_ostream_joiner(oss1, ", "));
-        std::copy(Wbuf.shape.begin(), Wbuf.shape.end(), std::experimental::make_ostream_joiner(oss2, ", "));
-        throw std::invalid_argument("W and y arrays have incompatible shapes: {" + oss1.str() + 
-                                    "}, {" + oss2.str() + "}");
-    }
+    check_equal("W and y arrays have incompatible shapes",
+                std::make_reverse_iterator(ybuf.shape.end()), std::make_reverse_iterator(ybuf.shape.begin() + ax),
+                std::make_reverse_iterator(Wbuf.shape.end()), std::make_reverse_iterator(Wbuf.shape.begin()));
 
     if (!ybuf.size || !Wbuf.size)
         throw std::invalid_argument("W and y must have a positive size");
@@ -334,7 +328,7 @@ auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W, py:
         size_t j0 = r0 * yarr.shape[ax], j1 = r1 * yarr.shape[ax];
 
         #pragma omp for
-        for (size_t i = 0; i < repeats; i++)
+        for (size_t i = 0; i < static_cast<size_t>(repeats); i++)
         {
             e.run([&]
             {
@@ -404,6 +398,7 @@ auto robust_lsq(py::array_t<T, py::array::c_style | py::array::forcecast> W, py:
     py::gil_scoped_acquire acquire;
 
     return out;
+
 }
 
 }

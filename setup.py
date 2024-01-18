@@ -4,9 +4,9 @@ from setuptools import setup, find_namespace_packages
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 import numpy
 
-__version__ = '1.0.1'
+__version__ = '1.1.0'
 
-extension_args = {'extra_compile_args': ['-fopenmp'],
+extension_args = {'extra_compile_args': ['-fopenmp', '-std=c++20'],
                   'extra_link_args': ['-lgomp'],
                   'library_dirs': ['/usr/local/lib',
                                    os.path.join(sys.prefix, 'lib')],
@@ -25,6 +25,10 @@ extensions = [Pybind11Extension("streak_finder.src.fft_functions",
                                 **extension_args),
               Pybind11Extension("streak_finder.src.median",
                                 sources=["streak_finder/src/median.cpp"],
+                                define_macros = [('VERSION_INFO', __version__)],
+                                **extension_args),
+              Pybind11Extension("streak_finder.src.streak_finder",
+                                sources=["streak_finder/src/streak_finder.cpp"],
                                 define_macros = [('VERSION_INFO', __version__)],
                                 **extension_args)]
 

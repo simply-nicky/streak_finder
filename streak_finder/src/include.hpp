@@ -24,6 +24,20 @@ namespace streak_finder {
 
 namespace py = pybind11;
 
+template <typename Container, typename Shape, typename = std::enable_if_t<
+    std::is_rvalue_reference_v<Container &&> && std::is_integral_v<typename std::remove_cvref_t<Shape>::value_type>
+>>
+inline py::array_t<typename Container::value_type> as_pyarray(Container && seq, Shape && shape)
+{
+    Container * seq_ptr = new Container(std::move(seq));
+    auto capsule = py::capsule(seq_ptr, [](void * p) {delete reinterpret_cast<Container *>(p);});
+    return py::array(std::forward<Shape>(shape),  // shape of array
+                     seq_ptr->data(),  // c-style contiguous strides for Container
+                     capsule           // numpy array references this parent
+    );
+}
+
+
 template <typename Container, typename = std::enable_if_t<std::is_rvalue_reference_v<Container &&>>>
 inline py::array_t<typename Container::value_type> as_pyarray(Container && seq)
 {
@@ -35,19 +49,19 @@ inline py::array_t<typename Container::value_type> as_pyarray(Container && seq)
     );
 }
 
+template <typename Container, typename Shape, typename = std::enable_if_t<
+    std::is_integral_v<typename std::remove_cvref_t<Shape>::value_type>
+>>
+inline py::array_t<typename Container::value_type> to_pyarray(const Container & seq, Shape && shape)
+{
+    return py::array(std::forward<Shape>(shape), seq.data());
+}
+
 template <typename Container>
 inline py::array_t<typename Container::value_type> to_pyarray(const Container & seq)
 {
     return py::array(seq.size(), seq.data());
 }
-
-namespace detail {
-
-struct Constants
-{
-    // 1 / sqrt(2 * pi)
-    static constexpr double M_1_SQRT2PI = 0.3989422804014327; 
-};
 
 template <typename T, typename = void>
 struct is_input_iterator : std::false_type {};
@@ -56,6 +70,17 @@ template <typename T>
 struct is_input_iterator<T,
     std::void_t<decltype(*std::declval<T &>()), decltype(++std::declval<T &>())>
 > : std::true_type {};
+
+template <typename T>
+constexpr bool is_input_iterator_v = is_input_iterator<T>::value;
+
+namespace detail {
+
+struct Constants
+{
+    // 1 / sqrt(2 * pi)
+    static constexpr double M_1_SQRT2PI = 0.3989422804014327;
+};
 
 template <typename T>
 class any_container
@@ -83,6 +108,7 @@ public:
 
     any_container(std::vector<T> && v) : vec(std::move(v)) {}
 
+    // Moves the vector out of an rvalue any_container
     operator std::vector<T> && () && { return std::move(this->vec); }
 
     std::vector<T> & operator*() {return this->vec;}
@@ -92,13 +118,6 @@ public:
     const std::vector<T> * operator->() const {return &(this->vec);}
 };
 
-}
-
-template <class InputIt, typename = std::enable_if_t<detail::is_input_iterator<InputIt>::value>>
-auto get_size(InputIt first, InputIt last)
-{
-    using value_t = typename InputIt::value_type;
-    return std::reduce(first, last, value_t(1), std::multiplies<value_t>());
 }
 
 template <typename Container>
@@ -128,15 +147,12 @@ void check_dimensions(const std::string & name, ssize_t axis, const Container & 
     check_dimensions(name, axis + 1, shape, index...);
 }
 
-template <typename Container, typename Function, typename = std::enable_if_t<std::is_integral_v<typename Container::value_type>>>
-void check_shape(const Container & shape, Function && func)
+template <typename Container, typename = std::enable_if_t<std::is_integral_v<typename Container::value_type>>>
+void fail_container_check(std::string msg, const Container & shape)
 {
-    if (std::forward<Function>(func)(shape) || !get_size(shape.begin(), shape.end()))
-    {
-        std::ostringstream oss;
-        std::copy(shape.begin(), shape.end(), std::experimental::make_ostream_joiner(oss, ", "));
-        throw std::invalid_argument("invalid shape: {" + oss.str() + "}");
-    }
+    std::ostringstream oss;
+    std::copy(shape.begin(), shape.end(), std::experimental::make_ostream_joiner(oss, ", "));
+    throw std::invalid_argument(msg + ": {" + oss.str() + "}");
 }
 
 template <typename ForwardIt1, typename ForwardIt2>
@@ -151,22 +167,59 @@ void check_equal(const std::string & msg, ForwardIt1 first1, ForwardIt1 last1, F
     }
 }
 
-template <typename T, typename V>
-void check_optional(const std::string & name, const py::array_t<T, py::array::c_style | py::array::forcecast> & inp,
-                    std::optional<py::array_t<V, py::array::c_style | py::array::forcecast>> & opt, V fill_value)
+template <typename T, int ExtraFlags>
+void fill_array(py::array_t<T, ExtraFlags> & arr, T fill_value)
 {
-    py::buffer_info ibuf = inp.request();
+    auto fill = py::array_t<T, ExtraFlags>(py::ssize_t(1));
+    fill.mutable_at(0) = fill_value;
+    PyArray_CopyInto(reinterpret_cast<PyArrayObject *>(arr.ptr()), reinterpret_cast<PyArrayObject *>(fill.ptr()));
+}
+
+template <typename I, int ExtraFlags>
+void fill_indices(std::string name, size_t xsize, size_t isize, std::optional<py::array_t<I, ExtraFlags>> & idxs)
+{
+    if (xsize == 1)
+    {
+        idxs = py::array_t<I, ExtraFlags>(isize);
+        fill_array(idxs.value(), I());
+    }
+    else if (xsize == isize)
+    {
+        idxs = py::array_t<I, ExtraFlags>(isize);
+        auto ptr = static_cast<I *>(idxs.value().request().ptr);
+        for (size_t i = 0; i < isize; i++) ptr[i] = i;
+    }
+    else throw std::invalid_argument(name + " is not defined");
+}
+
+template <typename I, int ExtraFlags>
+void check_indices(std::string name, size_t xsize, size_t isize, std::optional<py::array_t<I, ExtraFlags>> & idxs)
+{
+    if (idxs && idxs.value().size())
+    {
+        if (static_cast<size_t>(idxs.value().size()) != isize)
+            throw std::invalid_argument(name + " has an invalid size (" + std::to_string(idxs.value().size()) +
+                                        " != " + std::to_string(isize) + ")");
+        auto begin = idxs.value().data();
+        auto end = begin + idxs.value().size();
+        auto [min, max] = std::minmax_element(begin, end);
+        if (*max >= static_cast<I>(xsize) || *min < I())
+            throw std::out_of_range(name + " is out of range");
+    }
+}
+
+template <typename ForwardIt, typename V, int ExtraFlags>
+void check_optional(const std::string & name, ForwardIt first, ForwardIt last,
+                    std::optional<py::array_t<V, ExtraFlags>> & opt, V fill_value)
+{
     if (!opt)
     {
-        opt = py::array_t<V>(ibuf.shape);
-        auto fill = py::array_t<V>(py::ssize_t(1));
-        fill.mutable_at(0) = fill_value;
-        PyArray_CopyInto(reinterpret_cast<PyArrayObject *>(opt.value().ptr()),
-                         reinterpret_cast<PyArrayObject *>(fill.ptr()));
+        opt = py::array_t<V, ExtraFlags>(std::vector(first, last));
+        fill_array(opt.value(), fill_value);
     }
     py::buffer_info obuf = opt.value().request();
     check_equal(name + " and inp arrays must have identical shapes",
-                obuf.shape.begin(), obuf.shape.end(), ibuf.shape.begin(), ibuf.shape.end());
+                obuf.shape.begin(), obuf.shape.end(), first, last);
 }
 
 template <typename T>
@@ -205,8 +258,8 @@ public:
         return *this;
     }
 
-    template <class Array>
-    Array swap_axes(Array && arr) const
+    template <class Array, typename = std::enable_if_t<std::is_base_of_v<py::array, std::remove_cvref_t<Array>>>>
+    Array && swap_axes(Array && arr) const
     {
         size_t counter = 0;
         for (py::ssize_t i = 0; i < arr.ndim(); i++)
@@ -220,8 +273,10 @@ public:
         return std::forward<Array>(arr);
     }
 
-    template <class Array>
-    Array swap_axes_back(Array && arr) const
+    template <class Array, typename V = std::remove_cvref_t<Array>::value_type, typename = std::enable_if_t<
+        std::is_same_v<py::array_t<V>, std::remove_cvref_t<Array>>
+    >>
+    Array && swap_axes_back(Array && arr) const
     {
         size_t counter = arr.ndim() - this->size();
         for (py::ssize_t i = arr.ndim() - 1; i >= 0; i--)
@@ -244,6 +299,13 @@ public:
     const_iterator end() const {return this->vec.end();}
 };
 
+template <typename F, typename = std::enable_if_t<std::is_floating_point<F>::value>>
+bool isclose(F a, F b, F atol = F(1e-8), F rtol = F(1e-5))
+{
+    if (fabs(a - b) <= atol + rtol * std::fmax(fabs(a), fabs(b))) return true;
+    return false;
+}
+
 inline void * import_numpy() {import_array(); return NULL;}
 
 class thread_exception
@@ -261,15 +323,15 @@ public:
     }
 
     void capture_exception()
-    { 
+    {
         std::unique_lock<std::mutex> guard(this->lock);
-        this->ptr = std::current_exception(); 
-    }   
+        this->ptr = std::current_exception();
+    }
 
     template <typename Function, typename... Args>
     void run(Function && f, Args &&... params)
     {
-        try 
+        try
         {
             std::forward<Function>(f)(std::forward<Args>(params)...);
         }

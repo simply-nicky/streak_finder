@@ -6,14 +6,29 @@ namespace streak_finder {
 
 namespace detail{
 
-template <typename T, typename U>
+template <typename T>
+inline constexpr int signum(T val)
+{
+    return (T(0) < val) - (val < T(0));
+}
+
+/* Returns a positive remainder of division */
+template <typename T, typename U, typename = std::enable_if_t<std::is_integral_v<T> && std::is_integral_v<U>>>
 constexpr auto modulo(T a, U b) -> decltype(a % b)
 {
     return (a % b + b) % b;
 }
 
+/* Returns a positive remainder of division */
+template <typename T, typename U, typename = std::enable_if_t<std::is_floating_point_v<T> || std::is_floating_point_v<U>>>
+constexpr auto modulo(T a, U b) -> decltype(std::fmod(a, b))
+{
+    return std::fmod(std::fmod(a, b) + b, b);
+}
+
+/* Returns a quotient: a = quotient * b + modulo(a, b) */
 template <typename T, typename U>
-constexpr auto remainder(T a, U b) -> decltype(modulo(a, b))
+constexpr auto quotient(T a, U b) -> decltype(modulo(a, b))
 {
     return (a - modulo(a, b)) / b;
 }
@@ -24,7 +39,7 @@ constexpr std::make_signed_t<T> mirror(T a, U min, V max)
     using F = std::make_signed_t<T>;
     F val = std::minus<F>()(a, min);
     F period = std::minus<F>()(max, min) - 1;
-    if (modulo(remainder(val, period), 2)) return period - modulo(val, period) + min;
+    if (modulo(quotient(val, period), 2)) return period - modulo(val, period) + min;
     else return modulo(val, period) + min;
 }
 
@@ -34,7 +49,7 @@ constexpr std::make_signed_t<T> reflect(T a, U min, V max)
     using F = std::make_signed_t<T>;
     F val = std::minus<F>()(a, min);
     F period = std::minus<F>()(max, min);
-    if (modulo(remainder(val, period), 2)) return period - 1 - modulo(val, period) + min;
+    if (modulo(quotient(val, period), 2)) return period - 1 - modulo(val, period) + min;
     else return modulo(val, period) + min;
 }
 
@@ -54,6 +69,18 @@ auto ravel_index_impl(InputIt1 cfirst, InputIt1 clast, InputIt2 sfirst)
     value_t index = value_t();
     for (; cfirst != clast; cfirst++, ++sfirst) index += *cfirst * *sfirst;
     return index;
+}
+
+template <size_t Dim = 0, typename Strides>
+size_t ravel_index_var(const Strides & strides)
+{
+    return 0;
+}
+
+template <size_t Dim = 0, typename Strides, typename... Ix>
+size_t ravel_index_var(const Strides & strides, size_t i, Ix... index)
+{
+    return i * strides[Dim] + ravel_index_var<Dim + 1>(strides, index...);
 }
 
 template <typename InputIt, typename OutputIt, typename T>
@@ -87,18 +114,24 @@ public:
 
     using ShapeContainer = detail::any_container<size_t>;
 
-    shape_handler(size_t ndim, size_t size, ShapeContainer shape, ShapeContainer strides) :
-        ndim(ndim), size(size), shape(std::move(shape)), strides(std::move(strides)) {}
+    shape_handler() = default;
 
-    shape_handler(ShapeContainer shape) : ndim(std::distance(shape->begin(), shape->end()))
+    shape_handler(ShapeContainer sh, ShapeContainer st) : shape(std::move(sh)), strides(std::move(st))
     {
-        this->size = get_size(shape->begin(), shape->end());
-        size_t stride = this->size;
-        for (auto length : *shape)
+        ndim = shape.size();
+        size = strides[ndim - 1];
+        for (size_t i = 0; i < ndim; i++) size += (shape[i] - 1) * strides[i];
+    }
+
+    shape_handler(ShapeContainer sh) : shape(std::move(sh))
+    {
+        ndim = shape.size();
+        size = std::reduce(shape.begin(), shape.end(), 1, std::multiplies());
+        size_t stride = size;
+        for (auto length : shape)
         {
-            stride /= length;
-            this->strides.push_back(stride);
-            this->shape.push_back(length);
+            stride = (length) ? stride / length : stride;
+            strides.push_back(stride);
         }
     }
 
@@ -151,6 +184,14 @@ public:
         return ravel_index_impl(coord.begin(), coord.end(), this->strides.begin());
     }
 
+    template <typename... Ix, typename = std::enable_if_t<(std::is_integral_v<Ix> && ...)>>
+    auto ravel_index(Ix... index) const
+    {
+        if (sizeof...(index) > ndim) fail_dim_check(sizeof...(index), "too many indices for an array");
+
+        return ravel_index_var(strides, size_t(index)...);
+    }
+
     // initializer_list's aren't deducible, so don't get matched by the above template;
     // we need this to explicitly allow implicit conversion from one:
     template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
@@ -162,8 +203,8 @@ public:
     template <
         typename CoordIter,
         typename = std::enable_if_t<
-            std::is_integral_v<typename CoordIter::value_type> || 
-            std::is_same_v<typename CoordIter::iterator_category, std::output_iterator_tag>
+            std::is_integral_v<typename std::iterator_traits<CoordIter>::value_type> ||
+            std::is_same_v<typename std::iterator_traits<CoordIter>::iterator_category, std::output_iterator_tag>
         >
     >
     CoordIter unravel_index(CoordIter first, size_t index) const
@@ -178,6 +219,63 @@ protected:
     void fail_dim_check(size_t dim, const std::string & msg) const
     {
         throw std::out_of_range(msg + ": " + std::to_string(dim) + " (ndim = " + std::to_string(this->ndim) + ')');
+    }
+};
+
+// Taken from the boost::hash_combine: https://www.boost.org/doc/libs/1_35_0/doc/html/boost/hash_combine_id241013.html
+template <class T>
+inline size_t hash_combine(size_t seed, const T & v)
+{
+    return seed ^ (std::hash<T>()(v) + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+}
+
+template <typename T, size_t N>
+struct ArrayHasher
+{
+    size_t operator()(const std::array<T, N> & arr) const
+    {
+        size_t h = 0;
+        for (auto elem : arr) h = hash_combine(h, elem);
+        return h;
+    }
+};
+
+// Recursive template code derived from Matthieu M.
+template <class Tuple, size_t Index = std::tuple_size<Tuple>::value - 1>
+struct HashValueImpl
+{
+    static size_t apply(size_t seed, const Tuple & tuple)
+    {
+        seed = HashValueImpl<Tuple, Index - 1>::apply(seed, tuple);
+        return hash_combine(seed, std::get<Index>(tuple));
+    }
+};
+
+template <class Tuple>
+struct HashValueImpl<Tuple, 0>
+{
+    static size_t apply(size_t seed, const Tuple & tuple)
+    {
+        return hash_combine(seed, std::get<0>(tuple));
+    }
+};
+
+
+template <typename ... Ts>
+struct TupleHasher
+{
+    size_t operator()(const std::tuple<Ts...> & tt) const
+    {
+        return HashValueImpl<std::tuple<Ts...>>::apply(0, tt);
+    }
+};
+
+template <typename T1, typename T2>
+struct PairHasher
+{
+    size_t operator()(const std::pair<T1, T2> & tt) const
+    {
+        return HashValueImpl<std::pair<T1, T2>>::apply(0, tt);
     }
 };
 
@@ -219,6 +317,8 @@ public:
     using pointer = typename traits::pointer;
     using reference = typename traits::reference;
 
+    strided_iterator() : ptr(nullptr), stride(1) {}
+
     // This is templated so that we can allow constructing a const iterator from
     // a nonconst iterator...
     template <bool RHIsConst, typename = std::enable_if_t<IsConst || !RHIsConst>>
@@ -253,7 +353,7 @@ public:
     reference operator[] (size_t index) const {return ptr[index * stride];}
     reference operator*() const {return *(ptr);}
     pointer operator->() const {return ptr;}
-    
+
 private:
     T * ptr;
     size_t stride;
@@ -272,8 +372,10 @@ public:
 
     operator py::array_t<T>() const {return {shape, ptr};}
 
-    array(size_t ndim, size_t size, ShapeContainer shape, ShapeContainer strides, T * ptr) :
-        shape_handler(ndim, size, std::move(shape), std::move(strides)), ptr(ptr) {}
+    array() : shape_handler(), ptr(nullptr) {}
+
+    array(ShapeContainer shape, ShapeContainer strides, T * ptr) :
+        shape_handler(std::move(shape), std::move(strides)), ptr(ptr) {}
 
     array(shape_handler handler, T * ptr) : shape_handler(std::move(handler)), ptr(ptr) {}
 
@@ -284,10 +386,10 @@ public:
     T & operator[] (size_t index) {return ptr[index];}
     const T & operator[] (size_t index) const {return ptr[index];}
 
-    iterator begin() {return {ptr, 1};}
-    iterator end() {return {ptr + size, 1};}
-    const_iterator begin() const {return {ptr, 1};}
-    const_iterator end() const {return {ptr + size, 1};}
+    iterator begin() {return {ptr, strides[ndim - 1]};}
+    iterator end() {return {ptr + size, strides[ndim - 1]};}
+    const_iterator begin() const {return {ptr, strides[ndim - 1]};}
+    const_iterator end() const {return {ptr + size, strides[ndim - 1]};}
 
     template <bool IsConst>
     typename strided_iterator<T, IsConst>::difference_type index(const strided_iterator<T, IsConst> & iter) const
@@ -316,10 +418,14 @@ public:
         shape_handler(std::move(other_shape)).unravel_index(std::back_inserter(coord), index);
         for (auto axis : *axes) coord.insert(std::next(coord.begin(), axis), 0);
 
-        return array<T>(shape.size(), get_size(shape.begin(), shape.end()),
-                        std::move(new_shape), std::move(new_strides), ptr + ravel_index(coord.begin(), coord.end()));
+        return array<T>(std::move(new_shape), std::move(new_strides), ptr + ravel_index(coord.begin(), coord.end()));
     }
 
+    /* Line slice iterators:
+        Take a slice of an array 'array' as follows:
+        - array[..., :, ...] slice, where ':' is at 'axis'-th axis
+        - ravel_index(i_0, i_1, ..., i_axis-1, i_axis+1, ...., i_n-1) = index
+    */
     iterator line_begin(size_t axis, size_t index)
     {
         check_index(axis, index);
@@ -352,6 +458,54 @@ public:
         return {iter + lsize, strides[axis]};
     }
 
+    template <typename CoordIter, typename = std::enable_if_t<is_input_iterator_v<CoordIter>>>
+    const T & at(CoordIter first, CoordIter last) const
+    {
+        return ptr[ravel_index(first, last)];
+    }
+
+    template <typename CoordIter, typename = std::enable_if_t<is_input_iterator_v<CoordIter>>>
+    T & at(CoordIter first, CoordIter last)
+    {
+        return ptr[ravel_index(first, last)];
+    }
+
+    template <typename Container, typename = std::enable_if_t<std::is_integral_v<typename Container::value_type>>>
+    const T & at(const Container & coord) const
+    {
+        return ptr[ravel_index(coord)];
+    }
+
+    template <typename Container, typename = std::enable_if_t<std::is_integral_v<typename Container::value_type>>>
+    T & at(const Container & coord)
+    {
+        return ptr[ravel_index(coord)];
+    }
+
+    template <typename I, typename = std::enable_if_t<std::is_integral_v<I>>>
+    const T & at(const std::initializer_list<I> & coord) const
+    {
+        return ptr[ravel_index(coord)];
+    }
+
+    template <typename I, typename = std::enable_if_t<std::is_integral_v<I>>>
+    T & at(const std::initializer_list<I> & coord)
+    {
+        return ptr[ravel_index(coord)];
+    }
+
+    template <typename... Ix, typename = std::enable_if_t<(std::is_integral_v<Ix> && ...)>>
+    const T & at(Ix... index) const
+    {
+        return ptr[ravel_index(index...)];
+    }
+
+    template <typename... Ix, typename = std::enable_if_t<(std::is_integral_v<Ix> && ...)>>
+    T & at(Ix... index)
+    {
+        return ptr[ravel_index(index...)];
+    }
+
     const T * data() const {return ptr;}
     T * data() {return ptr;}
 
@@ -375,10 +529,18 @@ class vector_array : public array<T>
     std::vector<T> buffer;
 
 public:
-    vector_array(typename array<T>::ShapeContainer shape) : array<T>(std::move(shape), nullptr)
+    vector_array() = default;
+
+    template <typename Vector, typename = std::enable_if_t<std::is_base_of_v<std::vector<T>, std::remove_cvref_t<Vector>>>>
+    vector_array(Vector && v, detail::shape_handler::ShapeContainer shape) : array<T>(std::move(shape), v.data()), buffer(std::forward<Vector>(v))
+    {
+        if (buffer.size() != this->size) buffer.resize(this->size);
+    }
+
+    vector_array(detail::shape_handler::ShapeContainer shape) : array<T>(std::move(shape), nullptr)
     {
         buffer = std::vector<T>(this->size, T());
-        this->set_data(buffer.data());
+        array<T>::set_data(buffer.data());
     }
 };
 
@@ -416,48 +578,12 @@ public:
 };
 
 /*----------------------------------------------------------------------------*/
-/*------------------------------ Binary search -------------------------------*/
-/*----------------------------------------------------------------------------*/
-// Array search
-enum class side
-{
-    left = 0,
-    right = 1
-};
-
-/* find idx \el [0, npts], so that base[idx - 1] < key <= base[idx] */
-template <class ForwardIt, typename T, class Compare>
-ForwardIt searchsorted(const T & value, ForwardIt first, ForwardIt last, side s, Compare comp)
-{
-    auto npts = std::distance(first, last);
-    auto extreme = std::next(first, npts - 1);
-    if (comp(value, *first)) return first;
-    if (!comp(value, *extreme)) return extreme;
-
-    ForwardIt out;
-    switch (s)
-    {
-        case side::left:
-            out = std::lower_bound(first, last, value, comp);
-            break;
-
-        case side::right:
-            out = std::next(first, std::distance(first, std::upper_bound(first, last, value, comp)) - 1);
-            break;
-
-        default:
-            throw std::invalid_argument("invalid side argument: " + std::to_string(static_cast<int>(s)));
-    }
-    return out;
-}
-
-/*----------------------------------------------------------------------------*/
 /*------------------------------- Wirth select -------------------------------*/
 /*----------------------------------------------------------------------------*/
 
 /*---------------------------------------------------------------------------
     Function :  kth_smallest()
-    In       :  array of elements, n elements in the array, rank k 
+    In       :  array of elements, n elements in the array, rank k
     Out      :  one element
     Job      :  find the kth smallest element in the array
     Notice   :  Buffer must be of size n
@@ -489,7 +615,7 @@ RandomIt wirthselect(RandomIt first, RandomIt last, typename std::iterator_trait
         if (j < key) l = i;
         if (key < i) m = j;
     }
-    
+
     return key;
 }
 
@@ -532,42 +658,188 @@ static std::unordered_map<std::string, extend> const modes = {{"constant", exten
 namespace detail {
 
 template <typename T>
-T rectangular(T x, T sigma) {return (x <= sigma) ? T(1.0) : T(0.0);}
+T rectangular(T x) {return (std::abs(x) <= T(1.0)) ? T(1.0) : T();}
 
 template <typename T>
-T gaussian(T x, T sigma) {return exp(-std::pow(3 * x / sigma, 2) / 2) / Constants::M_1_SQRT2PI;}
+T gaussian(T x)
+{
+    if (std::abs(x) <= T(1.0)) return Constants::M_1_SQRT2PI * std::exp(-std::pow(3 * x, 2) / 2);
+    return T();
+}
 
 template <typename T>
-T triangular(T x, T sigma) {return std::max<T>(1 - std::abs(x / sigma), T());}
+T gaussian_grad(T x) {return -9 * x * gaussian(x);}
 
 template <typename T>
-T parabolic(T x, T sigma) {return T(0.75) * std::max<T>(1 - std::pow(x / sigma, 2), T());}
+T triangular(T x) {return std::max<T>(T(1.0) - std::abs(x), T());}
 
 template <typename T>
-T biweight(T x, T sigma) {return 15 / 16 * std::max<T>(std::pow(1 - std::pow(x / sigma, 2), 2), T());}
+T triangular_grad(T x)
+{
+    if (std::abs(x) < T(1.0)) return -signum(x);
+    return T();
+}
+
+template <typename T>
+T parabolic(T x) {return T(0.75) * std::max<T>(1 - std::pow(x, 2), T());}
+
+template <typename T>
+T parabolic_grad(T x)
+{
+    if (std::abs(x) < T(1.0)) return T(0.75) * -2 * x;
+    return T();
+}
+
+template <typename T>
+T biweight(T x) {return T(0.9375) * std::pow(std::max<T>(1 - std::pow(x, 2), T()), 2);}
+
+template <typename T>
+T biweight_grad(T x)
+{
+    if (std::abs(x) < T(1.0)) return T(0.9375) * -4 * x * (1 - std::pow(x, 2));
+    return T();
+}
 
 }
 
 template <typename T>
 struct kernels
 {
-    using kernel = T (*)(T, T);
+    enum kernel_type
+    {
+        biweight = 0,
+        gaussian = 1,
+        parabolic = 2,
+        rectangular = 3,
+        triangular = 4
+    };
 
-    static inline std::map<std::string, kernel> registered_kernels = {{"biweight"   , detail::biweight<T>},
-                                                                      {"gaussian"   , detail::gaussian<T>},
-                                                                      {"parabolic"  , detail::parabolic<T>},
-                                                                      {"rectangular", detail::rectangular<T>},
-                                                                      {"triangular" , detail::triangular<T>}};
+    using kernel = T (*)(T);
+    using gradient = T (*)(T);
+
+    static inline std::map<std::string, kernel_type> kernel_names =
+    {
+        {"biweight", kernel_type::biweight},
+        {"gaussian", kernel_type::gaussian},
+        {"parabolic", kernel_type::parabolic},
+        {"rectangular", kernel_type::rectangular},
+        {"triangular", kernel_type::triangular}
+    };
+
+    static inline std::map<kernel_type, std::pair<kernel, kernel>> registered_kernels =
+    {
+        {kernel_type::biweight, {detail::biweight<T>, detail::biweight_grad<T>}},
+        {kernel_type::gaussian, {detail::gaussian<T>, detail::gaussian_grad<T>}},
+        {kernel_type::parabolic, {detail::parabolic<T>, detail::parabolic_grad<T>}},
+        {kernel_type::rectangular, {detail::rectangular<T>, nullptr}},
+        {kernel_type::triangular, {detail::triangular<T>, detail::triangular_grad<T>}}
+    };
+
+    static kernel get_kernel(kernel_type k, bool throw_if_missing = true)
+    {
+        auto it = registered_kernels.find(k);
+        if (it != registered_kernels.end()) return it->second.first;
+        if (throw_if_missing)
+            throw std::invalid_argument("kernel is missing for " + std::to_string(k));
+        return nullptr;
+    }
 
     static kernel get_kernel(std::string name, bool throw_if_missing = true)
     {
-        auto it = registered_kernels.find(name);
-        if (it != registered_kernels.end()) return it->second;
+        auto it = kernel_names.find(name);
+        if (it != kernel_names.end()) return get_kernel(it->second, throw_if_missing);
         if (throw_if_missing)
             throw std::invalid_argument("kernel is missing for " + name);
         return nullptr;
     }
+
+    static kernel get_grad(kernel_type k, bool throw_if_missing = true)
+    {
+        auto it = registered_kernels.find(k);
+        if (it != registered_kernels.end() && it->second.second) return it->second.second;
+        if (throw_if_missing)
+            throw std::invalid_argument("gradient is missing for " + std::to_string(k));
+        return nullptr;
+    }
+
+    static kernel get_grad(std::string name, bool throw_if_missing = true)
+    {
+        auto it = kernel_names.find(name);
+        if (it != kernel_names.end()) return get_grad(it->second, throw_if_missing);
+        if (throw_if_missing)
+            throw std::invalid_argument("gradient is missing for " + name);
+        return nullptr;
+    }
+
+
 };
+
+/*----------------------------------------------------------------------------*/
+/*-------------- Compile-time to_array, to_tuple, and to_tie -----------------*/
+/*----------------------------------------------------------------------------*/
+namespace detail {
+template <size_t... I>
+constexpr auto integral_sequence_impl(std::index_sequence<I...>)
+{
+  return std::make_tuple(std::integral_constant<size_t, I>{}...);
+}
+
+template <typename T, T... I, size_t... J>
+constexpr auto reverse_impl(std::integer_sequence<T, I...>, std::index_sequence<J...>)
+{
+    return std::integer_sequence<T, std::get<sizeof...(J) - J - 1>(std::make_tuple(I...))...>{};
+}
+
+}
+
+template <size_t N>
+constexpr auto integral_sequence()
+{
+    return detail::integral_sequence_impl(std::make_index_sequence<N>{});
+}
+
+template <typename T, T... I>
+constexpr auto reverse_sequence(std::integer_sequence<T, I...> seq)
+{
+    return detail::reverse_impl(seq, std::make_index_sequence<sizeof...(I)>{});
+}
+
+template <size_t N, class Func>
+constexpr decltype(auto) apply_to_sequence(Func && func)
+{
+    return std::apply(std::forward<Func>(func), integral_sequence<N>());
+}
+
+template <size_t N, class Container, typename T = Container::value_type>
+constexpr std::array<T, N> to_array(const Container & a, size_t start)
+{
+    auto impl = [&a, start](auto... idxs) -> std::array<T, N> {return {{a[start + idxs]...}};};
+    return apply_to_sequence<N>(impl);
+}
+
+template <size_t N, class Container>
+constexpr auto to_tuple(const Container & a, size_t start)
+{
+    return apply_to_sequence<N>([&a, start](auto... idxs){return std::make_tuple(a[start + idxs]...);});
+}
+
+template <typename T, size_t N>
+constexpr auto to_tuple(const std::array<T, N> & a)
+{
+    return apply_to_sequence<N>([&a](auto... idxs){return std::make_tuple(a[idxs]...);});
+}
+
+template <size_t N, class Container>
+constexpr auto to_tie(Container & a, size_t start)
+{
+    return apply_to_sequence<N>([&a, start](auto... idxs){return std::tie(a[start + idxs]...);});
+}
+
+template <typename T, size_t N>
+constexpr auto to_tie(std::array<T, N> & a)
+{
+    return apply_to_sequence<N>([&a](auto... idxs){return std::tie(a[idxs]...);});
+}
 
 }
 

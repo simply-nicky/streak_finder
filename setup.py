@@ -4,9 +4,9 @@ from setuptools import setup, find_namespace_packages
 from pybind11.setup_helpers import Pybind11Extension, build_ext
 import numpy
 
-__version__ = '1.0.1'
+__version__ = '1.2.0'
 
-extension_args = {'extra_compile_args': ['-fopenmp'],
+extension_args = {'extra_compile_args': ['-fopenmp', '-std=c++20'],
                   'extra_link_args': ['-lgomp'],
                   'library_dirs': ['/usr/local/lib',
                                    os.path.join(sys.prefix, 'lib')],
@@ -14,17 +14,16 @@ extension_args = {'extra_compile_args': ['-fopenmp'],
                                    os.path.join(sys.prefix, 'include'),
                                    os.path.join(os.path.dirname(__file__), 'streak_finder/src')]}
 
-extensions = [Pybind11Extension("streak_finder.src.fft_functions",
-                                sources=["streak_finder/src/fft_functions.cpp"],
-                                define_macros = [('VERSION_INFO', __version__)],
-                                libraries = ['fftw3', 'fftw3f', 'fftw3l', 'fftw3_omp', 'fftw3f_omp', 'fftw3l_omp'],
-                                **extension_args),
-              Pybind11Extension("streak_finder.src.image_proc",
+extensions = [Pybind11Extension("streak_finder.src.image_proc",
                                 sources=["streak_finder/src/image_proc.cpp"],
                                 define_macros = [('VERSION_INFO', __version__)],
                                 **extension_args),
-              Pybind11Extension("streak_finder.src.median",
-                                sources=["streak_finder/src/median.cpp"],
+              Pybind11Extension("streak_finder.src.label",
+                                sources=["streak_finder/src/label.cpp"],
+                                define_macros = [('VERSION_INFO', __version__)],
+                                **extension_args),
+              Pybind11Extension("streak_finder.src.streak_finder",
+                                sources=["streak_finder/src/streak_finder.cpp"],
                                 define_macros = [('VERSION_INFO', __version__)],
                                 **extension_args)]
 
@@ -42,4 +41,4 @@ setup(name='streak_finder',
       install_requires=['numpy', 'scipy'],
       ext_modules=extensions,
       extras_require={"test": "pytest"},
-      python_requires='>=3.7')
+      python_requires='>=3.10')

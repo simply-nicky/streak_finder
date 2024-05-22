@@ -1,3 +1,3 @@
-from .image_lines import Structure, Line, Image, DetState
-from .image_lines import distance_to_line, generate_line, grow_step, region_grow, log_nfa, find_streaks
+from .cbc_setup import Streaks
+from .streak_finder import PatternStreakFinder, PatternsStreakFinder, StreakFinderResult
 from . import src

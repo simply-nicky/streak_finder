@@ -1,12 +1,16 @@
 #ifndef INCLUDE_
 #define INCLUDE_
 
+#include <cassert>
 #include <cstring>
 #include <experimental/iterator>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <vector>
+#include <math.h>
 #include <omp.h>
 #include <Python.h>
 #include <numpy/arrayobject.h>
@@ -14,6 +18,15 @@
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
 #include <fftw3.h>
+
+#include <numpy/numpyconfig.h>
+#ifdef NPY_1_7_API_VERSION
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
+#define NPE_PY_ARRAY_OBJECT PyArrayObject
+#else
+//TODO Remove this as soon as support for Numpy version before 1.7 is dropped
+#define NPE_PY_ARRAY_OBJECT PyObject
+#endif
 
 #define STRINGIFY(x) #x
 #define MACRO_STRINGIFY(x) STRINGIFY(x)
@@ -36,7 +49,6 @@ inline py::array_t<typename Container::value_type> as_pyarray(Container && seq, 
                      capsule           // numpy array references this parent
     );
 }
-
 
 template <typename Container, typename = std::enable_if_t<std::is_rvalue_reference_v<Container &&>>>
 inline py::array_t<typename Container::value_type> as_pyarray(Container && seq)
@@ -63,6 +75,14 @@ inline py::array_t<typename Container::value_type> to_pyarray(const Container & 
     return py::array(seq.size(), seq.data());
 }
 
+template <template <typename ...> class R=std::vector, typename Top, typename Sub = typename Top::value_type>
+R<typename Sub::value_type> flatten(const Top & all)
+{
+    R<typename Sub::value_type> accum;
+    for (auto & sub : all) accum.insert(std::end(accum), std::begin(sub), std::end(sub));
+    return accum;
+}
+
 template <typename T, typename = void>
 struct is_input_iterator : std::false_type {};
 
@@ -74,51 +94,69 @@ struct is_input_iterator<T,
 template <typename T>
 constexpr bool is_input_iterator_v = is_input_iterator<T>::value;
 
-namespace detail {
-
-struct Constants
+template <class Container, class Element = typename Container::value_type>
+struct WrappedContainer
 {
-    // 1 / sqrt(2 * pi)
-    static constexpr double M_1_SQRT2PI = 0.3989422804014327;
+public:
+    using container_type = Container;
+    using value_type = Element;
+    using size_type = typename Container::size_type;
+    using iterator = container_type::iterator;
+    using const_iterator = container_type::const_iterator;
+
+    WrappedContainer() = default;
+
+    WrappedContainer(Container && c) : m_ctr(std::move(c)) {}
+
+    // Moves the container out of an rvalue WrappedContainer
+    operator container_type && () && {return std::move(m_ctr);}
+
+    // Enable container to work with for loops
+    const_iterator begin() const {return m_ctr.begin();}
+    const_iterator end() const {return m_ctr.end();}
+    iterator begin() {return m_ctr.begin();}
+    iterator end() {return m_ctr.end();}
+
+    // Return underlying container
+    container_type & operator*() {return m_ctr;}
+    const container_type & operator*() const {return m_ctr;}
+
+    // Access the methods of the underlying container
+    container_type * operator->() {return &m_ctr;}
+    const container_type * operator->() const {return &m_ctr;}
+
+    size_type size() const {return m_ctr.size();}
+
+protected:
+    container_type m_ctr;
 };
 
 template <typename T>
-class any_container
+struct AnyContainer : public WrappedContainer<std::vector<T>>
 {
 protected:
-    std::vector<T> vec;
+    using WrappedContainer<std::vector<T>>::m_ctr;
 
 public:
-    any_container() = default;
+    using WrappedContainer<std::vector<T>>::WrappedContainer;
+    using size_type = WrappedContainer<std::vector<T>>::size_type;
 
-    template <typename It, typename = std::enable_if_t<is_input_iterator<It>::value>>
-    any_container(It first, It last) : vec(first, last) {}
+    template <typename InputIt, typename = std::enable_if_t<is_input_iterator_v<InputIt>>>
+    AnyContainer(InputIt first, InputIt last) : WrappedContainer<std::vector<T>>(std::vector<T>(first, last)) {}
 
-    template <typename Container,
-        typename = std::enable_if_t<
-            std::is_convertible_v<decltype(*std::begin(std::declval<const Container &>())), T>
-        >
-    >
-    any_container(const Container & c) : any_container(std::begin(c), std::end(c)) {}
+    template <typename Container, typename = std::enable_if_t<
+        std::is_convertible_v<typename Container::value_type, T>
+    >>
+    AnyContainer(const Container & c) : AnyContainer(std::begin(c), std::end(c)) {}
 
     // initializer_list's aren't deducible, so don't get matched by the above template;
     // we need this to explicitly allow implicit conversion from one:
     template <typename TIn, typename = std::enable_if_t<std::is_convertible_v<TIn, T>>>
-    any_container(const std::initializer_list<TIn> & c) : any_container(c.begin(), c.end()) {}
+    AnyContainer(const std::initializer_list<TIn> & c) : AnyContainer(c.begin(), c.end()) {}
 
-    any_container(std::vector<T> && v) : vec(std::move(v)) {}
-
-    // Moves the vector out of an rvalue any_container
-    operator std::vector<T> && () && { return std::move(this->vec); }
-
-    std::vector<T> & operator*() {return this->vec;}
-    const std::vector<T> & operator*() const {return this->vec;}
-
-    std::vector<T> * operator->() {return &(this->vec);}
-    const std::vector<T> * operator->() const {return &(this->vec);}
+    T & operator[] (size_type index) {return m_ctr[index];}
+    const T & operator[] (size_type index) const {return m_ctr[index];}
 };
-
-}
 
 template <typename Container>
 void check_dimensions(const std::string & name, ssize_t axis, const Container & shape) {}
@@ -175,39 +213,6 @@ void fill_array(py::array_t<T, ExtraFlags> & arr, T fill_value)
     PyArray_CopyInto(reinterpret_cast<PyArrayObject *>(arr.ptr()), reinterpret_cast<PyArrayObject *>(fill.ptr()));
 }
 
-template <typename I, int ExtraFlags>
-void fill_indices(std::string name, size_t xsize, size_t isize, std::optional<py::array_t<I, ExtraFlags>> & idxs)
-{
-    if (xsize == 1)
-    {
-        idxs = py::array_t<I, ExtraFlags>(isize);
-        fill_array(idxs.value(), I());
-    }
-    else if (xsize == isize)
-    {
-        idxs = py::array_t<I, ExtraFlags>(isize);
-        auto ptr = static_cast<I *>(idxs.value().request().ptr);
-        for (size_t i = 0; i < isize; i++) ptr[i] = i;
-    }
-    else throw std::invalid_argument(name + " is not defined");
-}
-
-template <typename I, int ExtraFlags>
-void check_indices(std::string name, size_t xsize, size_t isize, std::optional<py::array_t<I, ExtraFlags>> & idxs)
-{
-    if (idxs && idxs.value().size())
-    {
-        if (static_cast<size_t>(idxs.value().size()) != isize)
-            throw std::invalid_argument(name + " has an invalid size (" + std::to_string(idxs.value().size()) +
-                                        " != " + std::to_string(isize) + ")");
-        auto begin = idxs.value().data();
-        auto end = begin + idxs.value().size();
-        auto [min, max] = std::minmax_element(begin, end);
-        if (*max >= static_cast<I>(xsize) || *min < I())
-            throw std::out_of_range(name + " is out of range");
-    }
-}
-
 template <typename ForwardIt, typename V, int ExtraFlags>
 void check_optional(const std::string & name, ForwardIt first, ForwardIt last,
                     std::optional<py::array_t<V, ExtraFlags>> & opt, V fill_value)
@@ -223,36 +228,36 @@ void check_optional(const std::string & name, ForwardIt first, ForwardIt last,
 }
 
 template <typename T>
-class sequence : public detail::any_container<T>
+struct Sequence : public AnyContainer<T>
 {
+protected:
+    using AnyContainer<T>::m_ctr;
+
 public:
-    using iterator = typename std::vector<T>::iterator;
-    using const_iterator = typename std::vector<T>::const_iterator;
-    using detail::any_container<T>::any_container;
+    using AnyContainer<T>::AnyContainer;
 
     template <typename U, typename = std::enable_if_t<std::is_convertible_v<U, T>>>
-    sequence(U value, size_t length = 1)
+    Sequence(U value, size_t length = 1)
     {
-        std::fill_n(std::back_inserter(this->vec), length, value);
+        std::fill_n(std::back_inserter(m_ctr), length, value);
     }
 
     template <typename Container, typename = std::enable_if_t<std::is_convertible_v<typename Container::value_type, T>>>
-    sequence(const Container & vec, size_t length)
+    Sequence(const Container & vec, size_t length)
     {
         if (vec.size() < length)
             throw std::invalid_argument("rank of vector (" + std::to_string(vec.size()) +
                                         ") is less than the required length (" + std::to_string(length) + ")");
-        std::copy_n(vec.begin(), length, std::back_inserter(this->vec));
+        std::copy_n(vec.begin(), length, std::back_inserter(m_ctr));
     }
 
-    size_t size() const {return this->vec.size();}
-    sequence & unwrap(T max)
+    Sequence & unwrap(T max)
     {
-        for (size_t i = 0; i < this->size(); i++)
+        for (size_t i = 0; i < m_ctr.size(); i++)
         {
-            this->vec[i] = (this->vec[i] >= 0) ? this->vec[i] : max + this->vec[i];
-            if (this->vec[i] >= max)
-                throw std::invalid_argument("axis " + std::to_string(this->vec[i]) +
+            m_ctr[i] = (m_ctr[i] >= 0) ? m_ctr[i] : max + m_ctr[i];
+            if (m_ctr[i] >= max)
+                throw std::invalid_argument("axis " + std::to_string(m_ctr[i]) +
                                             " is out of bounds (ndim = " + std::to_string(max) + ")");
         }
         return *this;
@@ -264,7 +269,7 @@ public:
         size_t counter = 0;
         for (py::ssize_t i = 0; i < arr.ndim(); i++)
         {
-            if (std::find(this->vec.begin(), this->vec.end(), i) == this->vec.end())
+            if (std::find(m_ctr.begin(), m_ctr.end(), i) == m_ctr.end())
             {
                 auto obj = reinterpret_cast<PyArrayObject *>(arr.release().ptr());
                 arr = py::reinterpret_steal<std::remove_cvref_t<Array>>(PyArray_SwapAxes(obj, counter++, i));
@@ -278,10 +283,10 @@ public:
     >>
     Array && swap_axes_back(Array && arr) const
     {
-        size_t counter = arr.ndim() - this->size();
+        size_t counter = arr.ndim() - m_ctr.size();
         for (py::ssize_t i = arr.ndim() - 1; i >= 0; i--)
         {
-            if (std::find(this->vec.begin(), this->vec.end(), i) == this->vec.end())
+            if (std::find(m_ctr.begin(), m_ctr.end(), i) == m_ctr.end())
             {
                 auto obj = reinterpret_cast<PyArrayObject *>(arr.release().ptr());
                 arr = py::reinterpret_steal<std::remove_cvref_t<Array>>(PyArray_SwapAxes(obj, --counter, i));
@@ -289,14 +294,6 @@ public:
         }
         return std::forward<Array>(arr);
     }
-
-    T & operator[] (size_t index) {return this->vec[index];}
-    const T & operator[] (size_t index) const {return this->vec[index];}
-
-    iterator begin() {return this->vec.begin();}
-    const_iterator begin() const {return this->vec.begin();}
-    iterator end() {return this->vec.end();}
-    const_iterator end() const {return this->vec.end();}
 };
 
 template <typename F, typename = std::enable_if_t<std::is_floating_point<F>::value>>

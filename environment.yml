@@ -9,7 +9,7 @@ dependencies:
   - hdf5plugin
   - llvm-openmp
   - numpy
+  - pandas
   - pybind11
   - python>=3.7
   - scipy
-  - tqdm

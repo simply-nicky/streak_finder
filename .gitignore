@@ -3,6 +3,7 @@
 /streak_finder/src/*.o
 /streak_finder/src/*.out
 /streak_finder/src/*.so
+/notebooks
 
 #jupyter checkpoints
 .ipynb_checkpoints/

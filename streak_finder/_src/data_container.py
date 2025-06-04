@@ -1,7 +1,7 @@
 from collections import defaultdict
 from dataclasses import fields
-from typing import (Any, DefaultDict, Dict, Iterable, Iterator, List, Sequence, Set, Sized, Tuple, Type,
-                    TypeVar, get_origin, get_type_hints, overload)
+from typing import (Any, DefaultDict, Dict, Iterable, Iterator, List, Sequence, Set, Sized, Tuple,
+                    Type, TypeVar, cast, get_origin, get_type_hints, overload)
 import numpy as np
 from .annotations import (Array, ArrayNamespace, BoolArray, DataclassInstance, Indices, IntArray,
                           IntSequence, NumPy, RealSequence, Scalar)
@@ -193,5 +193,7 @@ class IndexedContainer(ArrayContainer):
                   for new_index, index in enumerate(to_list(indices))]
         return type(self).concatenate(result)
 
-def array_namespace(*arrays: Array | DataContainer | Any) -> ArrayNamespace:
-    return NumPy
+def array_namespace(*arrays: Array | DataContainer) -> ArrayNamespace:
+    namespaces = set(array.__array_namespace__() for array in arrays
+                     if isinstance(array, (np.ndarray, DataContainer)))
+    return cast(ArrayNamespace, namespaces.pop())

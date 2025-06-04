@@ -1,5 +1,5 @@
 from dataclasses import Field
-from typing import (Any, Callable, ClassVar, Dict, Generic, Literal, NamedTuple, Optional, Protocol,
+from typing import (Any, Callable, ClassVar, Dict, Generic, Literal, NamedTuple, Protocol,
                     Sequence, Tuple, TypeVar, Union, cast, overload, runtime_checkable)
 import numpy as np
 import numpy.typing as npt
@@ -10,7 +10,7 @@ Self = TypeVar('Self')
 class ReferenceType(Generic[T]):
     __callback__: Callable[['ReferenceType[T]'], Any]
     def __new__(cls: type[Self], o: T,
-                callback: Optional[Callable[['ReferenceType[T]'], Any]]=...) -> Self:
+                callback: Callable[['ReferenceType[T]'], Any] | None=...) -> Self:
         ...
     def __call__(self) -> T:
         ...

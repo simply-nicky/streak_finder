@@ -1,1 +1,1 @@
-from . import bresenham, label, signal_proc, streak_finder
+from . import bresenham, label, index, median, signal_proc, streak_finder

@@ -1,7 +1,7 @@
-from typing import Optional, Tuple
+from typing import Tuple
 from ..annotations import IntArray, NDIntArray, NDRealArray, RealArray, Shape
 
-def draw_lines(lines: RealArray, shape: Shape, idxs: Optional[IntArray]=None,
+def draw_lines(lines: RealArray, shape: Shape, idxs: IntArray | None=None,
                max_val: float=1.0, kernel: str='rectangular', overlap: str='sum',
                num_threads: int=1) -> NDRealArray:
     """Draw thick lines with variable thickness and the antialiasing applied on a single frame.
@@ -36,7 +36,7 @@ def draw_lines(lines: RealArray, shape: Shape, idxs: Optional[IntArray]=None,
     """
     ...
 
-def write_lines(lines: RealArray, shape: Shape, idxs: Optional[IntArray]=None,
+def write_lines(lines: RealArray, shape: Shape, idxs: IntArray | None=None,
                 max_val: float=1.0, kernel: str='rectangular', num_threads: int=1
                 ) -> Tuple[NDIntArray, NDIntArray, NDRealArray]:
     """Return an array of rasterized thick lines indices and their corresponding pixel values.

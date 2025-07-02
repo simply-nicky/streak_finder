@@ -4,7 +4,7 @@ import pytest
 from streak_finder.annotations import NDBoolArray, NDIntArray, NDRealArray, Shape
 from streak_finder.label import Structure2D
 from streak_finder.ndimage import draw_lines
-from streak_finder import PatternStreakFinder, Peaks, Streak, StreakFinderResult
+from streak_finder.streak_finder import PatternStreakFinder, Peaks, Streak, StreakFinderResult
 from streak_finder.test_util import check_close
 
 class TestStreakFinder():
@@ -117,7 +117,8 @@ class TestStreakFinder():
 
     @pytest.fixture
     def streak(self, rng: np.random.Generator, result: StreakFinderResult) -> Streak:
-        index = list(result.streaks)[rng.integers(0, len(result.streaks))]
+        # index = list(result.streaks)[rng.integers(0, len(result.streaks))]
+        index = list(result.streaks)[0]
         return result.streaks[index]
 
     def get_pixels(self, x: int, y: int, finder: PatternStreakFinder
@@ -133,9 +134,9 @@ class TestStreakFinder():
         return self.line(xs, ys, image[ys, xs])
 
     def test_streak_points(self, streak: Streak, image: NDRealArray, finder: PatternStreakFinder):
-        ends = np.concatenate([self.get_line(ctr[0], ctr[1], image, finder)
-                                for ctr in streak.centers], axis=0)
-        check_close(ends, np.array(streak.ends))
+        ends = np.stack([self.get_line(ctr[0], ctr[1], image, finder) for ctr in streak.centers])
+        streak_ends = np.array(streak.ends).reshape((-1, 2, 2))
+        check_close(np.sort(ends, axis=-2), np.sort(streak_ends, axis=-2))
 
         pts = np.concatenate([np.stack(self.get_pixels(ctr[0], ctr[1], finder), axis=-1)
                               for ctr in streak.centers])

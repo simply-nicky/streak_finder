@@ -9,6 +9,8 @@ from streak_finder.test_util import check_close
 Kernel = Callable[[RealArray, RealArray], RealArray]
 WriteResult = Tuple[IntArray, IntArray, RealArray]
 
+@pytest.mark.parametrize('shape,ndim,', [((34, 27, 42), 2),
+                                         ((24, 33, 40, 36), 3)])
 class TestDrawLine():
     @pytest.fixture
     def xp(self) -> ArrayNamespace:
@@ -30,18 +32,8 @@ class TestDrawLine():
         return {'biweight': biweight, 'gaussian': gaussian, 'parabolic': parabolic,
                 'rectangular': rectangular, 'triangular': triangular}
 
-    @pytest.fixture(params=[(30, 80),])
-    def n_lines(self, request: pytest.FixtureRequest, rng: np.random.Generator) -> int:
-        vmin, vmax = request.param
-        return rng.integers(vmin, vmax)
-
-    @pytest.fixture(params=[(10, 50, 4),])
-    def shape(self, request: pytest.FixtureRequest, rng: np.random.Generator) -> Shape:
-        vmin, vmax, size = request.param
-        return tuple(rng.integers(vmin, vmax, size=size))
-
-    @pytest.fixture(params=[2, 3])
-    def ndim(self, request: pytest.FixtureRequest) -> int:
+    @pytest.fixture(params=[45, 51])
+    def n_lines(self, request: pytest.FixtureRequest) -> int:
         return request.param
 
     @pytest.fixture(params=[10.0])
@@ -90,9 +82,9 @@ class TestDrawLine():
                                         kernel=kernel)
         return xp.asarray(idxs), xp.asarray(ids), xp.asarray(values)
 
-    def test_empty_lines(self, shape: Shape, xp: ArrayNamespace):
-        image = draw_lines(xp.zeros((0, 5)), shape[-2:])
-        idxs, ids, values = write_lines(xp.zeros((0, 5)), shape[-2:])
+    def test_empty_lines(self, shape: Shape, ndim: int, xp: ArrayNamespace):
+        image = draw_lines(xp.zeros((0, 5)), shape[-ndim:])
+        idxs, ids, values = write_lines(xp.zeros((0, 5)), shape[-ndim:])
         assert xp.sum(image) == 0.0
         assert idxs.size == ids.size == values.size == 0
 

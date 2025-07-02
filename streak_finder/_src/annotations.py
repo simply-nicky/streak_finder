@@ -1,8 +1,16 @@
 from dataclasses import Field
-from typing import (Any, Callable, ClassVar, Dict, Generic, Literal, NamedTuple, Protocol,
-                    Sequence, Tuple, TypeVar, Union, cast, overload, runtime_checkable)
+from typing import (Any, Callable, ClassVar, Dict, Generic, List, Literal, NamedTuple, Protocol,
+                    Sequence, Tuple, Type, TypeVar, Union, cast, overload, runtime_checkable)
+from types import ModuleType
 import numpy as np
 import numpy.typing as npt
+
+Device = str
+
+GenericAlies = type(list[int]) | type(List[int])
+UnionType = type(int | list) | type(Union[int, list])
+
+AnyType = Type | GenericAlies | UnionType | str | Any
 
 T = TypeVar('T')
 Self = TypeVar('Self')
@@ -14,6 +22,14 @@ class ReferenceType(Generic[T]):
         ...
     def __call__(self) -> T:
         ...
+
+@runtime_checkable
+class Sized(Protocol):
+    def __len__(self) -> int: ...
+
+@runtime_checkable
+class SupportsNamespace(Protocol):
+    def __array_namespace__(self) -> 'ModuleType | ArrayNamespace': ...
 
 @runtime_checkable
 class DataclassInstance(Protocol):
@@ -29,7 +45,7 @@ class SupportsDType(Protocol):
 DTypeLike = Union[
     str,            # like 'float32', 'int32'
     type[Any],      # like np.float32, np.int32, float, int
-    np.dtype,       # like np.dtype('float32'), np.dtype('int32')
+    DType,          # like np.dtype('float32'), np.dtype('int32')
     SupportsDType,  # like xp.float32, xp.int32
 ]
 
@@ -62,6 +78,13 @@ AnyFloat = float | np.floating[Any] | RealArray
 
 IntSequence = int | np.integer[Any] | Sequence[int] | IntArray
 RealSequence = float | np.floating[Any] | Sequence[float] | RealArray
+ROI = List[int] | Tuple[int, int, int, int] | IntArray
+
+ExpandedType = AnyType | Tuple[AnyType, List]
+
+Mode = Literal['constant', 'nearest', 'mirror', 'reflect', 'wrap']
+
+ReadOut = Array | int | float | Sequence[int] | Sequence[float]
 
 class EighResult(NamedTuple):
     eigenvalues : Array
@@ -71,6 +94,11 @@ class UniqueInverseResult(NamedTuple):
     """Struct returned by :func:`unique_inverse`."""
     values: Array
     inverse_indices: Array
+
+class UniqueCountsResult(NamedTuple):
+    """Struct returned by :func:`unique_counts`."""
+    values: Array
+    counts: Array
 
 class LinalgNamespace(Protocol):
     def det(self, a: ArrayLike) -> RealArray:
@@ -85,10 +113,13 @@ class LinalgNamespace(Protocol):
         Returns:
             An array of determinants of shape ``a.shape[:-2]``.
 
+        See also:
+            :func:`linalg.det`: Scipy-style API for determinant.
+
         Examples:
-            >>> a = jnp.array([[1, 2],
-            ...                [3, 4]])
-            >>> jnp.linalg.det(a)
+            >>> a = xp.array([[1, 2],
+            ...               [3, 4]])
+            >>> xp.linalg.det(a)
             Array(-2., dtype=float32)
         """
         ...
@@ -396,7 +427,7 @@ class ArrayNamespace(Protocol):
         ...
 
     def array(self, object: Any, dtype: DTypeLike | None = None, copy: bool = True,
-              order: str | None = "K", ndmin: int = 0, *, device: None = None
+              order: str | None = "K", ndmin: int = 0, *, device: Device | None = None
               ) -> Array:
         """Convert an object to a Array API array.
 
@@ -514,7 +545,7 @@ class ArrayNamespace(Protocol):
         ...
 
     def asarray(self, a: Any, dtype: DTypeLike | None = None, order: str | None = None,
-                *, copy: bool | None = None, device: None = None) -> Array:
+                *, copy: bool | None = None, device: Device | None = None) -> Array:
         """Convert an object to a Array API array.
 
         Array API implementation of :func:`numpy.asarray`.
@@ -842,7 +873,13 @@ class ArrayNamespace(Protocol):
         """
         ...
 
-    def atleast_1d(self, *arys: ArrayLike) -> Array | list[Array]:
+    @overload
+    def atleast_1d(self, arys: ArrayLike, /) -> Array: ...
+
+    @overload
+    def atleast_1d(self, *arys: ArrayLike) -> List[Array]: ...
+
+    def atleast_1d(self, *arys: ArrayLike) -> Array | List[Array]:
         """Convert inputs to arrays with at least 1 dimension.
 
         Array API implementation of :func:`numpy.atleast_1d`.
@@ -979,85 +1016,6 @@ class ArrayNamespace(Protocol):
         """
         ...
 
-    def cos(self, x: ArrayLike, /) -> RealArray:
-        """Compute a trigonometric cosine of each element of input.
-
-        Array API implementation of :obj:`numpy.cos`.
-
-        Args:
-            x: scalar or array. Angle in radians.
-
-        Returns:
-            An array containing the cosine of each element in ``x``, promotes to inexact
-            dtype.
-
-        See also:
-            - :func:`sin`: Computes a trigonometric sine of each element of input.
-            - :func:`tan`: Computes a trigonometric tangent of each element of
-                input.
-            - :func:`arccos` and :func:`acos`: Computes the inverse of
-                trigonometric cosine of each element of input.
-
-        Examples:
-            >>> pi = xp.pi
-            >>> x = xp.array([pi/4, pi/2, 3*pi/4, 5*pi/6])
-            >>> with xp.printoptions(precision=3, suppress=True):
-            ...   print(xp.cos(x))
-            [ 0.707 -0.    -0.707 -0.866]
-        """
-        ...
-
-    def cosh(self, x: ArrayLike, /) -> RealArray:
-        r"""Calculate element-wise hyperbolic cosine of input.
-
-        Array API implementation of :obj:`numpy.cosh`.
-
-        The hyperbolic cosine is defined by:
-
-        .. math::
-
-            cosh(x) = \frac{e^x + e^{-x}}{2}
-
-        Args:
-            x: input array or scalar.
-
-        Returns:
-            An array containing the hyperbolic cosine of each element of ``x``, promoting
-            to inexact dtype.
-
-        Note:
-            ``xp.cosh`` is equivalent to computing ``xp.cos(1j * x)``.
-
-        See also:
-            - :func:`sinh`: Computes the element-wise hyperbolic sine of the input.
-            - :func:`tanh`: Computes the element-wise hyperbolic tangent of the
-                input.
-            - :func:`arccosh`:  Computes the element-wise inverse of hyperbolic
-                cosine of the input.
-
-        Examples:
-            >>> x = xp.array([[3, -1, 0],
-            ...                [4, 7, -5]])
-            >>> with xp.printoptions(precision=3, suppress=True):
-            ...   xp.cosh(x)
-            Array([[ 10.068,   1.543,   1.   ],
-                   [ 27.308, 548.317,  74.21 ]], dtype=float32)
-            >>> with xp.printoptions(precision=3, suppress=True):
-            ...   xp.cos(1j * x)
-            Array([[ 10.068+0.j,   1.543+0.j,   1.   +0.j],
-                   [ 27.308+0.j, 548.317+0.j,  74.21 +0.j]], dtype=complex64, weak_type=True)
-
-            For complex-valued input:
-
-            >>> with xp.printoptions(precision=3, suppress=True):
-            ...   xp.cosh(5+1j)
-            Array(40.096+62.44j, dtype=complex64, weak_type=True)
-            >>> with xp.printoptions(precision=3, suppress=True):
-            ...   xp.cos(1j * (5+1j))
-            Array(40.096+62.44j, dtype=complex64, weak_type=True)
-        """
-        ...
-
     def compress(self, condition: ArrayLike, a: ArrayLike, axis: int | None = None, *,
                  fill_value: ArrayLike = 0) -> Array:
         """Compress an array along a given axis using a boolean condition.
@@ -1149,6 +1107,123 @@ class ArrayNamespace(Protocol):
             >>> xp.concatenate([x, y], axis=1)
             Array([[1., 1., 1., 0.],
                    [1., 1., 1., 0.]], dtype=float32)
+        """
+        ...
+
+    def copy(self, a: ArrayLike, order: str | None = None) -> Array:
+        """Return a copy of the array.
+
+        Array API implementation of :func:`numpy.copy`.
+
+        Args:
+            a: arraylike object to copy
+            order: Controls the memory layout of the copy. 'C' means C-order,
+                'F' means F-order, 'A' means 'F' if `a` is Fortran contiguous,
+                'C' otherwise. 'K' means match the layout of `a` as closely
+                as possible. (Note that this function and :meth:`ndarray.copy`
+                are very similar, but have different default values for their order
+                arguments.)
+
+        Returns:
+            a copy of the input array ``a``.
+
+        See Also:
+            - :func:`array`: create an array with or without a copy.
+
+        >>> f = lambda x: 2 * x
+        >>> x = xp.arange(4)
+        >>> y = f(x)
+        >>> print(y)
+        [0 2 4 6]
+
+        In situations like this, an explicit copy will let you keep access to the
+        original buffer:
+
+        >>> x = xp.arange(4)
+        >>> y = f(x.copy())
+        >>> print(y)
+        [0 2 4 6]
+        >>> print(x)
+        [0 1 2 3]
+        """
+        ...
+
+    def cos(self, x: ArrayLike, /) -> RealArray:
+        """Compute a trigonometric cosine of each element of input.
+
+        Array API implementation of :obj:`numpy.cos`.
+
+        Args:
+            x: scalar or array. Angle in radians.
+
+        Returns:
+            An array containing the cosine of each element in ``x``, promotes to inexact
+            dtype.
+
+        See also:
+            - :func:`sin`: Computes a trigonometric sine of each element of input.
+            - :func:`tan`: Computes a trigonometric tangent of each element of
+                input.
+            - :func:`arccos` and :func:`acos`: Computes the inverse of
+                trigonometric cosine of each element of input.
+
+        Examples:
+            >>> pi = xp.pi
+            >>> x = xp.array([pi/4, pi/2, 3*pi/4, 5*pi/6])
+            >>> with xp.printoptions(precision=3, suppress=True):
+            ...   print(xp.cos(x))
+            [ 0.707 -0.    -0.707 -0.866]
+        """
+        ...
+
+    def cosh(self, x: ArrayLike, /) -> RealArray:
+        r"""Calculate element-wise hyperbolic cosine of input.
+
+        Array API implementation of :obj:`numpy.cosh`.
+
+        The hyperbolic cosine is defined by:
+
+        .. math::
+
+            cosh(x) = \frac{e^x + e^{-x}}{2}
+
+        Args:
+            x: input array or scalar.
+
+        Returns:
+            An array containing the hyperbolic cosine of each element of ``x``, promoting
+            to inexact dtype.
+
+        Note:
+            ``xp.cosh`` is equivalent to computing ``xp.cos(1j * x)``.
+
+        See also:
+            - :func:`sinh`: Computes the element-wise hyperbolic sine of the input.
+            - :func:`tanh`: Computes the element-wise hyperbolic tangent of the
+                input.
+            - :func:`arccosh`:  Computes the element-wise inverse of hyperbolic
+                cosine of the input.
+
+        Examples:
+            >>> x = xp.array([[3, -1, 0],
+            ...                [4, 7, -5]])
+            >>> with xp.printoptions(precision=3, suppress=True):
+            ...   xp.cosh(x)
+            Array([[ 10.068,   1.543,   1.   ],
+                   [ 27.308, 548.317,  74.21 ]], dtype=float32)
+            >>> with xp.printoptions(precision=3, suppress=True):
+            ...   xp.cos(1j * x)
+            Array([[ 10.068+0.j,   1.543+0.j,   1.   +0.j],
+                   [ 27.308+0.j, 548.317+0.j,  74.21 +0.j]], dtype=complex64, weak_type=True)
+
+            For complex-valued input:
+
+            >>> with xp.printoptions(precision=3, suppress=True):
+            ...   xp.cosh(5+1j)
+            Array(40.096+62.44j, dtype=complex64, weak_type=True)
+            >>> with xp.printoptions(precision=3, suppress=True):
+            ...   xp.cos(1j * (5+1j))
+            Array(40.096+62.44j, dtype=complex64, weak_type=True)
         """
         ...
 
@@ -1334,7 +1409,7 @@ class ArrayNamespace(Protocol):
         ...
 
     def eye(self, N: DimSize, M: DimSize | None = None, k: int | ArrayLike = 0,
-            dtype: DTypeLike | None = None, *, device: None = None) -> Array:
+            dtype: DTypeLike | None = None, *, device: Device | None = None) -> Array:
         """Create a square or rectangular identity matrix
 
         Array API implementation of :func:`numpy.eye`.
@@ -1516,8 +1591,32 @@ class ArrayNamespace(Protocol):
         """
         ...
 
+    def fromstring(self, string: str, dtype: DTypeLike = float, count: int = -1, *,
+                   sep: str) -> Array:
+        """Convert a string of text into 1-D JAX array.
+
+        Array API implementation of :func:`numpy.fromstring`.
+
+        Args:
+            string: input string containing the data.
+            dtype: optional. Desired data type for the array. Default is ``float``.
+            count: optional integer specifying the number of items to read from the string.
+                If -1 (default), all items are read.
+            sep: the string used to separate values in the input string.
+
+        Returns:
+            A 1-D array containing the parsed data from the input string.
+
+        Examples:
+            >>> xp.fromstring("1 2 3", dtype=int, sep=" ")
+            Array([1, 2, 3], dtype=int32)
+            >>> xp.fromstring("0.1, 0.2, 0.3", dtype=float, count=2, sep=",")
+            Array([0.1, 0.2], dtype=float32)
+        """
+        ...
+
     def full(self, shape: Any, fill_value: ArrayLike, dtype: DTypeLike | None = None, *,
-             device: None = None) -> Array:
+             device: Device | None = None) -> Array:
         """Create an array full of a specified value.
 
         Array API implementation of :func:`numpy.full`.
@@ -1741,34 +1840,34 @@ class ArrayNamespace(Protocol):
     def linspace(self, start: ArrayLike, stop: ArrayLike, num: int = 50,
                  endpoint: bool = True, retstep: Literal[False] = False,
                  dtype: DTypeLike | None = None, axis: int = 0, *,
-                 device: None = None) -> Array:
+                 device: Device | None = None) -> Array:
         ...
 
     @overload
     def linspace(self, start: ArrayLike, stop: ArrayLike, num: int,
                  endpoint: bool, retstep: Literal[True],
                  dtype: DTypeLike | None = None, axis: int = 0, *,
-                 device: None = None) -> tuple[Array, Array]:
+                 device: Device | None = None) -> tuple[Array, Array]:
         ...
 
     @overload
     def linspace(self, start: ArrayLike, stop: ArrayLike, num: int = 50,
                  endpoint: bool = True, *, retstep: Literal[True],
                  dtype: DTypeLike | None = None, axis: int = 0,
-                 device: None = None) -> tuple[Array, Array]:
+                 device: Device | None = None) -> tuple[Array, Array]:
         ...
 
     @overload
     def linspace(self, start: ArrayLike, stop: ArrayLike, num: int = 50,
                  endpoint: bool = True, retstep: bool = False,
                  dtype: DTypeLike | None = None, axis: int = 0, *,
-                 device: None = None) -> Array | tuple[Array, Array]:
+                 device: Device | None = None) -> Array | tuple[Array, Array]:
         ...
 
     def linspace(self, start: ArrayLike, stop: ArrayLike, num: int = 50,
                  endpoint: bool = True, retstep: bool = False,
                  dtype: DTypeLike | None = None, axis: int = 0, *,
-                 device: None = None) -> Array | tuple[Array, Array]:
+                 device: Device | None = None) -> Array | tuple[Array, Array]:
         """Return evenly-spaced numbers within an interval.
 
         Array API implementation of :func:`numpy.linspace`.
@@ -2168,7 +2267,56 @@ class ArrayNamespace(Protocol):
         """
         ...
 
-    def ones(self, shape: Any, dtype: DTypeLike | None = None, *, device: None = None
+    def nan_to_num(self, x: ArrayLike, copy: bool = True, nan: ArrayLike = 0.0,
+                   posinf: ArrayLike | None = None, neginf: ArrayLike | None = None
+                   ) -> Array:
+        """Replace NaN and infinite entries in an array.
+
+        Array API implementation of :func:`numpy.nan_to_num`.
+
+        Args:
+            x: array of values to be replaced. If it does not have an inexact
+                dtype it will be returned unmodified.
+            copy: Whether to create a copy of x (True) or to replace values
+                in-place (False). The in-place operation only occurs if casting
+                to an array does not require a copy. Default is True.
+            nan: value to substitute for NaN entries. Defaults to 0.0.
+            posinf: value to substitute for positive infinite entries.
+                Defaults to the maximum representable value.
+            neginf: value to substitute for positive infinite entries.
+                Defaults to the minimum representable value.
+
+        Returns:
+            A copy of ``x`` with the requested substitutions.
+
+        See also:
+            - :func:`isnan`: return True where the array contains NaN
+            - :func:`isposinf`: return True where the array contains +inf
+            - :func:`isneginf`: return True where the array contains -inf
+
+        Examples:
+            >>> x = xp.array([0, xp.nan, 1, xp.inf, 2, -xp.inf])
+
+            Default substitution values:
+
+            >>> xp.nan_to_num(x)
+            Array([ 0.0000000e+00,  0.0000000e+00,  1.0000000e+00,  3.4028235e+38,
+                    2.0000000e+00, -3.4028235e+38], dtype=float32)
+
+            Overriding substitutions for ``-inf`` and ``+inf``:
+
+            >>> xp.nan_to_num(x, posinf=999, neginf=-999)
+            Array([   0.,    0.,    1.,  999.,    2., -999.], dtype=float32)
+
+            If you only wish to substitute for NaN values while leaving ``inf`` values
+            untouched, using :func:`~where` with :func:`isnan` is a better option:
+
+            >>> xp.where(xp.isnan(x), 0, x)
+            Array([  0.,   0.,   1.,  inf,   2., -inf], dtype=float32)
+        """
+        ...
+
+    def ones(self, shape: Any, dtype: DTypeLike | None = None, *, device: Device | None = None
              ) -> Array:
         """Create an array full of ones.
 
@@ -2472,6 +2620,30 @@ class ArrayNamespace(Protocol):
             >>> with xp.printoptions(precision=3, suppress=True):
             ...   print(xp.sin(x))
             [ 0.707  1.     0.707 -0.   ]
+        """
+        ...
+
+    def size(self, a: ArrayLike, axis: int | None=None) -> int:
+        """Return the number of elements along a given axis.
+
+        Args:
+            a: Input data.
+            axis : Axis along which the elements are counted. By default, give
+                the total number of elements.
+
+        Returns:
+            Number of elements along the specified axis.
+
+        Examples:
+            >>> a = xp.array([[1, 2, 3],
+                              [4, 5, 6]])
+            >>> xp.size(a)
+            6
+            >>> xp.size(a, 1)
+            3
+            >>> xp.size(a, 0)
+            2
+
         """
         ...
 
@@ -3223,6 +3395,50 @@ class ArrayNamespace(Protocol):
         """
         ...
 
+    def unique_counts(self, x: ArrayLike, /) -> UniqueCountsResult:
+        """Return unique values from x, along with counts.
+
+        Array API implementation of :func:`numpy.unique_counts`; this is equivalent to calling
+        :func:`unique` with `return_counts` and `equal_nan` set to True.
+
+        Args:
+            x: N-dimensional array from which unique values will be extracted.
+
+        Returns:
+            A tuple ``(values, counts)``, with the following properties:
+
+            - ``values``:
+                an array of shape ``(n_unique,)`` containing the unique values from ``x``.
+            - ``counts``:
+                An array of shape ``(n_unique,)``. Contains the number of occurrences of each unique
+                value in ``x``.
+
+        See also:
+            - :func:`unique`: general function for computing unique values.
+            - :func:`unique_values`: compute only ``values``.
+            - :func:`unique_inverse`: compute only ``values`` and ``inverse``.
+            - :func:`unique_all`: compute ``values``, ``indices``, ``inverse_indices``,
+                and ``counts``.
+
+        Examples:
+            Here we compute the unique values in a 1D array:
+
+            >>> x = xp.array([3, 4, 1, 3, 1])
+            >>> result = xp.unique_counts(x)
+
+            The result is a :class:`~typing.NamedTuple` with two named attributes.
+            The ``values`` attribute contains the unique values from the array:
+
+            >>> result.values
+            Array([1, 3, 4], dtype=int32)
+
+            The ``counts`` attribute contains the counts of each unique value in the input:
+
+            >>> result.counts
+            Array([2, 2, 1], dtype=int32)
+        """
+        ...
+
     def unique_inverse(self, x: ArrayLike, /) -> UniqueInverseResult:
         """Return unique values from x, along with indices, inverse indices, and counts.
 
@@ -3367,7 +3583,7 @@ class ArrayNamespace(Protocol):
         """
         ...
 
-    def zeros(self, shape: Any, dtype: DTypeLike | None = None, *, device: None = None
+    def zeros(self, shape: Any, dtype: DTypeLike | None = None, *, device: Device | None = None
               ) -> Array:
         """Create an array full of zeros.
 

@@ -1,0 +1,6 @@
+graft tests
+graft streak_finder/_src/config
+graft streak_finder/_src/src
+include LICENSE
+global-exclude *.py[cod]
+global-exclude *.so

@@ -4,7 +4,7 @@ from setuptools import setup, find_namespace_packages
 from pybind11.setup_helpers import Pybind11Extension
 import numpy
 
-__version__ = '1.3.0'
+__version__ = '1.4.0'
 
 extension_args = {'extra_compile_args': ['-fopenmp', '-std=c++20'],
                   'extra_link_args': ['-lgomp'],
@@ -17,8 +17,16 @@ extensions = [Pybind11Extension("streak_finder._src.src.bresenham",
                                 sources=["streak_finder/_src/src/bresenham.cpp"],
                                 define_macros = [('VERSION_INFO', __version__)],
                                 **extension_args),
+              Pybind11Extension("streak_finder._src.src.index",
+                                sources=["streak_finder/_src/src/index.cpp"],
+                                define_macros = [('VERSION_INFO', __version__)],
+                                **extension_args),
               Pybind11Extension("streak_finder._src.src.label",
                                 sources=["streak_finder/_src/src/label.cpp"],
+                                define_macros = [('VERSION_INFO', __version__)],
+                                **extension_args),
+              Pybind11Extension("streak_finder._src.src.median",
+                                sources=["streak_finder/_src/src/median.cpp"],
                                 define_macros = [('VERSION_INFO', __version__)],
                                 **extension_args),
               Pybind11Extension("streak_finder._src.src.signal_proc",
@@ -33,5 +41,5 @@ extensions = [Pybind11Extension("streak_finder._src.src.bresenham",
 setup(version=__version__,
       packages=find_namespace_packages(),
       install_package_data=True,
-      install_requires=['numpy', 'scipy'],
+      install_requires=['numpy', 'pybind11'],
       ext_modules=extensions,)

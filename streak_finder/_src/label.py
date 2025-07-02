@@ -1,4 +1,4 @@
-from typing import List, Optional, overload
+from typing import List, overload
 import numpy as np
 from .src.label import (Pixels2DDouble, Pixels2DFloat, PointSet2D, PointSet3D, Regions2D, Regions3D,
                         Structure2D, Structure3D)
@@ -15,17 +15,17 @@ def to_ellipse(matrix: NDRealArray) -> NDRealArray:
     return np.stack((a, b, theta), axis=-1)
 
 @overload
-def ellipse_fit(regions: Regions2D, data: NDRealArray, axes: Optional[List[int]]=None
+def ellipse_fit(regions: Regions2D, data: NDRealArray, axes: List[int] | None=None
                 ) -> NDRealArray:
     ...
 
 @overload
-def ellipse_fit(regions: List[Regions2D], data: NDRealArray, axes: Optional[List[int]]=None
+def ellipse_fit(regions: List[Regions2D], data: NDRealArray, axes: List[int] | None=None
                 ) -> List[NDRealArray]:
     ...
 
 def ellipse_fit(regions: Regions2D | List[Regions2D], data: NDRealArray,
-                axes: Optional[List[int]]=None) -> NDRealArray | List[NDRealArray]:
+                axes: List[int] | None=None) -> NDRealArray | List[NDRealArray]:
     covmat = covariance_matrix(regions, data, axes)
     if isinstance(covmat, list):
         return [to_ellipse(mat) for mat in covmat]

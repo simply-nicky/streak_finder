@@ -1,9 +1,9 @@
 from dataclasses import dataclass
-from typing import Optional, Tuple, TypeVar
+from typing import Tuple, TypeVar
 import numpy as np
 import pandas as pd
-from .annotations import IntArray, RealArray, RealSequence, Shape
-from .data_container import ArrayContainer, ArrayNamespace, IndexedContainer, NumPy
+from .annotations import RealArray, RealSequence, Shape
+from .data_container import ArrayContainer, ArrayNamespace, IndexArray, IndexedContainer, NumPy
 from .src.bresenham import draw_lines, write_lines
 
 L = TypeVar("L", bound='BaseLines')
@@ -63,7 +63,7 @@ class BaseLines(ArrayContainer):
         r_tau = xp.clip(r_tau[..., None], -0.5, 0.5)
         return tau * r_tau + center
 
-    def to_lines(self, width: Optional[RealSequence]=None) -> RealArray:
+    def to_lines(self, width: RealSequence | None=None) -> RealArray:
         """Export a streaks container into line parameters ``x0, y0, x1, y1, width``:
 
         * `[x0, y0]`, `[x1, y1]` : The coordinates of the line's ends.
@@ -87,17 +87,17 @@ class Lines(BaseLines):
 
 @dataclass
 class Streaks(IndexedContainer, BaseLines):
-    index       : IntArray
+    index       : IndexArray
     lines       : RealArray
 
     @classmethod
     def import_dataframe(cls, df: pd.DataFrame, xp: ArrayNamespace=NumPy) -> 'Streaks':
         lines = xp.stack((df['x_0'].to_numpy(), df['y_0'].to_numpy(),
                           df['x_1'].to_numpy(), df['y_1'].to_numpy()), axis=-1)
-        return cls(index=xp.asarray(df['index'].to_numpy()),
+        return cls(index=IndexArray(xp.asarray(df['index'].to_numpy())),
                    lines=xp.asarray(lines))
 
-    def concentric_only(self, x_ctr: float, y_ctr: float, threshold: float) -> 'Streaks':
+    def concentric_only(self, x_ctr: float, y_ctr: float, threshold: float=0.33) -> 'Streaks':
         xp = self.__array_namespace__()
         centers = xp.mean(self.lines.reshape(-1, 2, 2), axis=1)
         norm = xp.stack([self.lines[:, 3] - self.lines[:, 1],
@@ -129,7 +129,8 @@ class Streaks(IndexedContainer, BaseLines):
         """
         xp = self.__array_namespace__()
         idxs, ids, values = write_lines(lines=self.to_lines(width=width), shape=shape,
-                                        idxs=self.index, kernel=kernel, num_threads=num_threads)
+                                        idxs=xp.asarray(self.index), kernel=kernel,
+                                        num_threads=num_threads)
         normalised_shape = (np.prod(shape[:-2], dtype=int),) + shape[-2:]
         frames, y, x = xp.unravel_index(idxs, normalised_shape)
 
@@ -155,14 +156,15 @@ class Streaks(IndexedContainer, BaseLines):
         Returns:
             A pattern in :class:`numpy.ndarray` format.
         """
-        return draw_lines(self.to_lines(width=width), shape=shape, idxs=self.index,
+        xp = self.__array_namespace__()
+        return draw_lines(self.to_lines(width=width), shape=shape, idxs=xp.asarray(self.index),
                           kernel=kernel, num_threads=num_threads)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Export a streaks container into :class:`pandas.DataFrame`.
 
         Returns:
-            A dataframe with all the data specified in :class:`streak_finder.Streaks`.
+            A dataframe with all the data specified in :class:`cbclib_v2.Streaks`.
         """
         return pd.DataFrame({'index': self.index,
                              'x_0': self.x[:, 0], 'y_0': self.y[:, 0],

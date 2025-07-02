@@ -1,7 +1,6 @@
 name: streak_finder
 channels:
   - conda-forge
-  - defaults
 dependencies:
   - cxx-compiler
   - fftw
@@ -13,3 +12,4 @@ dependencies:
   - pybind11
   - python>=3.7
   - scipy
+  - tqdm

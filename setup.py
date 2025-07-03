@@ -1,7 +1,7 @@
 import os
 import sys
 from setuptools import setup, find_namespace_packages
-from pybind11.setup_helpers import Pybind11Extension, build_ext
+from pybind11.setup_helpers import Pybind11Extension
 import numpy
 
 __version__ = '1.4.0'

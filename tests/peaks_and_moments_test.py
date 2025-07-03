@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 from streak_finder.annotations import NDBoolArray, NDIntArray, NDRealArray, Shape
 from streak_finder.label import PointSet2D, Pixels2DDouble, Structure2D, label
-from streak_finder import Peaks, detect_peaks
+from streak_finder.streak_finder import Peaks, detect_peaks, filter_peaks
 from streak_finder.test_util import check_close
 
 class TestPeaksAndMoments():
@@ -82,7 +82,7 @@ class TestPeaksAndMoments():
     @pytest.fixture
     def filtered(self, peaks: Peaks, image: NDRealArray, mask: NDBoolArray, connectivity: Structure2D,
                  threshold: float, npts: int) -> Peaks:
-        return peaks.filter(image, mask, connectivity, threshold, npts)
+        return filter_peaks(peaks, image, mask, connectivity, threshold, npts)
 
     def test_filtered(self, peaks: Peaks, filtered: Peaks, image: NDRealArray, mask: NDBoolArray,
                       connectivity: Structure2D, threshold: float, npts: int):
@@ -91,7 +91,9 @@ class TestPeaksAndMoments():
         pts = np.concatenate([np.stack((region.x, region.y), axis=-1) for region in regions])
         peak_pts = peak_pts[np.any(np.all(peak_pts[:, None, :] == pts[None], axis=-1), axis=-1)]
         peak_pts = peak_pts[np.lexsort((peak_pts[:, 1], peak_pts[:, 0]))]
-        assert np.all(np.stack((filtered.x, filtered.y), axis=-1) == peak_pts)
+        filtered_pts = np.stack((filtered.x, filtered.y), axis=-1)
+        filtered_pts = filtered_pts[np.lexsort((filtered_pts[:, 1], filtered_pts[:, 0]))]
+        assert np.all(filtered_pts == peak_pts)
 
     @pytest.fixture(params=[10,])
     def rank(self, request: pytest.FixtureRequest) -> int:

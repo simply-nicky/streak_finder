@@ -1,4 +1,4 @@
-from typing import Dict, Optional
+from typing import Dict
 import numpy as np
 from ._src.annotations import ComplexArray, RealArray
 
@@ -10,7 +10,7 @@ _rtol = {np.dtype(np.float32): 1e-3, np.dtype(np.float64): 1e-4,
 def default_tolerance() -> Dict[np.dtype, float]:
     return _atol
 
-def tolerance(dtype: np.dtype, tol: Optional[float]=None) -> float:
+def tolerance(dtype: np.dtype, tol: float | None=None) -> float:
     if tol is None:
         return default_tolerance()[dtype]
     return default_tolerance().get(dtype, tol)
@@ -18,13 +18,13 @@ def tolerance(dtype: np.dtype, tol: Optional[float]=None) -> float:
 def default_gradient_tolerance() -> Dict[np.dtype, float]:
     return _rtol
 
-def gradient_tolerance(dtype: np.dtype, tol: Optional[float]=None) -> float:
+def gradient_tolerance(dtype: np.dtype, tol: float | None=None) -> float:
     if tol is None:
         return default_gradient_tolerance()[dtype]
     return default_gradient_tolerance().get(dtype, tol)
 
 def check_close(a: RealArray | ComplexArray, b: RealArray | ComplexArray,
-                rtol: Optional[float]=None, atol: Optional[float]=None):
+                rtol: float | None=None, atol: float | None=None):
     if rtol is None:
         rtol = max(gradient_tolerance(a.dtype, rtol),
                    gradient_tolerance(b.dtype, rtol))

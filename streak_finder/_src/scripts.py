@@ -1,6 +1,5 @@
 from typing import Callable, List, Literal, Tuple, Type, TypeVar, overload
 from dataclasses import dataclass, field
-
 from .annotations import (ArrayNamespace, BoolArray, NDArray, NDRealArray, NumPy, ReadOut,
                           RealArray, ROI)
 from .data_container import ArrayContainer, Container, array_namespace
@@ -198,5 +197,6 @@ def find_streaks(frames: NDArray, metadata: CrystMetadata, params: StreakFinderP
                                       num_threads=params.num_threads)
     streaks = det_obj.to_streaks(detected)
     if params.center is not None:
-        streaks = streaks.concentric_only(params.center[0], params.center[1])
+        mask = streaks.concentric_only(params.center[0], params.center[1])
+        streaks = streaks[mask]
     return streaks, detected, peaks, det_obj

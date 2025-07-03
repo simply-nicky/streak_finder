@@ -117,8 +117,7 @@ class TestStreakFinder():
 
     @pytest.fixture
     def streak(self, rng: np.random.Generator, result: StreakFinderResult) -> Streak:
-        # index = list(result.streaks)[rng.integers(0, len(result.streaks))]
-        index = list(result.streaks)[0]
+        index = list(result.streaks)[rng.integers(0, len(result.streaks))]
         return result.streaks[index]
 
     def get_pixels(self, x: int, y: int, finder: PatternStreakFinder

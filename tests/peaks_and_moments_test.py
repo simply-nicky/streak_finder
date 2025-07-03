@@ -61,6 +61,31 @@ class TestPeaksAndMoments():
     def peaks(self, image: NDRealArray, mask: NDBoolArray, threshold: float) -> Peaks:
         return detect_peaks(image, mask, radius=3, vmin=threshold)[0]
 
+    @pytest.fixture(params=[100,])
+    def n_keys(self, request: pytest.FixtureRequest) -> int:
+        return request.param
+
+    @pytest.fixture(params=[5,])
+    def vrange(self, request: pytest.FixtureRequest) -> int:
+        return request.param
+
+    @pytest.fixture
+    def keys(self, rng: np.random.Generator, n_keys: int, shape: Shape) -> NDIntArray:
+        x = rng.integers(0, shape[-1], size=n_keys)
+        y = rng.integers(0, shape[-2], size=n_keys)
+        return np.stack((x, y), axis=-1)
+
+    def test_peaks_find_range(self, peaks: Peaks, keys: NDIntArray, vrange: int):
+        points = np.array(list(peaks))
+        for key in keys:
+            nearest = np.array(peaks.find_range(key[0], key[1], vrange))
+            if nearest.size:
+                dist = np.sum((key - nearest)**2)
+                assert np.min(np.sum((points - key)**2, axis=-1)) == dist
+                assert dist < vrange * vrange
+            else:
+                assert np.min(np.sum((points - key)**2, axis=-1)) >= vrange * vrange
+
     def test_peaks(self, peaks: Peaks, image: NDRealArray, mask: NDBoolArray, threshold: float):
         points = np.stack((peaks.x, peaks.y), axis=-1)
         assert np.all(mask[points[..., 1], points[..., 0]])

@@ -404,6 +404,12 @@ PYBIND11_MODULE(streak_finder, m)
         }, py::keep_alive<0, 1>())
         .def("__len__", [](const Peaks & peaks){return peaks.size();})
         .def("__repr__", &Peaks::info)
+        .def("find_range", [](const Peaks & peaks, long x, long y, long range)
+        {
+            auto iter = peaks.find_range(Point<long>{x, y}, range);
+            if (iter != peaks.end()) return std::vector<long>{iter->x(), iter->y()};
+            return std::vector<long>{};
+        }, py::arg("x"), py::arg("y"), py::arg("range"))
         .def("append", [](Peaks & peaks, long x, long y){peaks.insert(Point<long>{x, y});}, py::arg("x"), py::arg("y"))
         .def("clear", [](Peaks & peaks){peaks.clear();})
         .def("extend", [](Peaks & peaks, std::vector<long> xvec, std::vector<long> yvec)

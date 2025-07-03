@@ -169,23 +169,21 @@ public:
         return m_ctr.find(Point<long>{key.x() / m_radius, key.y() / m_radius});
     }
 
-    const_iterator find_nearest(const Point<long> & key) const
+    const_iterator find_range(const Point<long> & key, long range) const
     {
-        auto x = key.x() / m_radius, y = key.y() / m_radius;
-        auto rem_x = key.x() - x * m_radius, rem_y = key.y() - y * m_radius;
-        const_iterator iter = m_ctr.find(Point<long>{x, y});
-
-        long shift_x = (m_radius != 2 * rem_x + 1);
-        long shift_y = (m_radius != 2 * rem_y + 1);
-        if (shift_x || shift_y)
+        auto start = (key - range) / m_radius;
+        auto end = (key + range) / m_radius + 1;
+        const_iterator iter = m_ctr.end();
+        for (long x = start[0]; x != end[0]; x++)
         {
-            auto xx = (rem_x < m_radius / 2) ? x - shift_x : x + shift_x;
-            auto yy = (rem_y < m_radius / 2) ? y - shift_y : y + shift_y;
-            iter = choose(m_ctr.find(Point<long>{xx, y}), iter, key);
-            iter = choose(m_ctr.find(Point<long>{x, yy}), iter, key);
-            if (shift_x && shift_y) iter = choose(m_ctr.find(Point<long>{xx, yy}), iter, key);
+            for (long y = start[1]; y != end[1]; y++)
+            {
+                iter = choose(iter, m_ctr.find(Point<long>{x, y}), key);
+            }
         }
-        return iter;
+
+        if (iter != m_ctr.end() && distance(key, *iter) < range * range) return iter;
+        return m_ctr.end();
     }
 
     std::pair<iterator, bool> insert(const Point<long> & value)
@@ -704,7 +702,7 @@ private:
             Point<long> pt = find_next_step<T, IsForward>(streak, point, structure.rank);
 
             // Find the closest peak in structure vicinity
-            auto iter = peaks.find_nearest(pt);
+            auto iter = peaks.find_range(pt, structure.rank);
             if (iter != peaks.end() && result.is_free(*iter) && *iter != point) pt = *iter;
 
             if (!result.is_bad(pt) && pt != point)

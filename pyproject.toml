@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 name = 'streak_finder'
 authors = [{name = 'Nikolay Ivanov', email = 'nikolay.ivanov@desy.de'}]
 description = 'Convergent beam streak finding algorithm'
-version = '1.4.1'
+version = '1.4.2'
 dependencies = [
     'h5py',
     'numpy',

@@ -1,7 +1,7 @@
 from collections import defaultdict
 from dataclasses import InitVar, dataclass, fields
 from typing import (Any, DefaultDict, Dict, Generic, Iterable, Iterator, List, Literal, Protocol,
-                    Sequence, Set, Tuple, Type, TypeVar, Union, cast, get_args, get_type_hints, overload)
+                    Sequence, Set, Tuple, Type, TypeVar, Union, get_args, get_type_hints, overload)
 import numpy as np
 from .src.index import Indexer
 from .annotations import (Array, ArrayNamespace, BoolArray, DataclassInstance, DType, Indices,
@@ -406,13 +406,4 @@ class IndexedContainer(ArrayContainer):
         return self[indexer]
 
 def array_namespace(*arrays: SupportsNamespace | Any) -> ArrayNamespace:
-    def namespaces(*arrays: SupportsNamespace | Any) -> Set:
-        result = set()
-        for array in arrays:
-            if isinstance(array, dict):
-                result |= namespaces(*array.values())
-            elif isinstance(array, SupportsNamespace):
-                result.add(array.__array_namespace__())
-        return result
-
-    return cast(ArrayNamespace, namespaces(*arrays).pop())
+    return NumPy

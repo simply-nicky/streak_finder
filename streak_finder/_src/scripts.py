@@ -3,13 +3,12 @@ from dataclasses import dataclass, field
 from .annotations import (ArrayNamespace, BoolArray, NDArray, NDRealArray, NumPy, ReadOut,
                           RealArray, ROI)
 from .data_container import ArrayContainer, Container, array_namespace
-from .data_processing import CrystData, RegionDetector, StreakDetector, Streaks, Peaks
+from .data_processing import CrystData, RegionDetector, StreakDetector, Streaks
 from .label import Structure2D, Structure3D, Regions2D
 from .parser import INIParser, JSONParser, Parser
-from .streak_finder import StreakFinderResult
+from .streak_finder import PeaksList, StreakList
 
 P = TypeVar("P", bound='BaseParameters')
-Detected = StreakFinderResult | List[StreakFinderResult]
 
 class BaseParameters(Container):
     @classmethod
@@ -177,15 +176,18 @@ class StreakFinderParameters(BaseParameters):
     peaks               : RegionParameters
     streaks             : StreakParameters
     center              : Tuple[float, float] | None = None
+    roi                 : ROIParameters = field(default_factory=ROIParameters)
     scale_whitefield    : bool = False
     num_threads         : int = 1
 
 def find_streaks(frames: NDArray, metadata: CrystMetadata, params: StreakFinderParameters
-                 ) -> Tuple[Streaks, Detected, List[Peaks], StreakDetector]:
+                 ) -> Tuple[Streaks, List[StreakList], PeaksList, StreakDetector]:
     if frames.ndim < 2:
         raise ValueError("Frame array must be at least 2 dimensional")
     data = CrystData(data=frames.reshape((-1,) + frames.shape[-2:]), mask=metadata.mask,
                      std=metadata.std, whitefield=metadata.whitefield)
+    if params.roi.size():
+        data = data.crop(params.roi.to_roi())
     if params.scale_whitefield:
         data = data.scale_whitefield(method='median', num_threads=params.num_threads)
     data = data.update_snr()

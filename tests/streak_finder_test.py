@@ -4,7 +4,7 @@ import pytest
 from streak_finder.annotations import NDBoolArray, NDIntArray, NDRealArray, Shape
 from streak_finder.label import Structure2D
 from streak_finder.ndimage import draw_lines
-from streak_finder.streak_finder import PatternStreakFinder, Peaks, Streak, StreakFinderResult
+from streak_finder.streak_finder import PatternStreakFinder, PeaksList, Streak, StreakList, p_value
 from streak_finder.test_util import check_close
 
 class TestStreakFinder():
@@ -107,18 +107,26 @@ class TestStreakFinder():
         return request.param
 
     @pytest.fixture
-    def peaks(self, finder: PatternStreakFinder, vmin: float, npts: int) -> Peaks:
+    def peaks(self, finder: PatternStreakFinder, vmin: float, npts: int) -> PeaksList:
         return finder.detect_peaks(vmin, npts)
 
-    @pytest.fixture
-    def result(self, finder: PatternStreakFinder, peaks: Peaks, vmin: float, xtol: float
-               ) -> StreakFinderResult:
-        return finder.detect_streaks(peaks, xtol, vmin)
+    @pytest.mark.xfail(raises=IndexError)
+    def test_peaks_list(self, peaks: PeaksList):
+        return peaks[len(peaks)]
 
     @pytest.fixture
-    def streak(self, rng: np.random.Generator, result: StreakFinderResult) -> Streak:
-        index = list(result.streaks)[rng.integers(0, len(result.streaks))]
-        return result.streaks[index]
+    def result(self, finder: PatternStreakFinder, peaks: PeaksList, vmin: float, xtol: float
+               ) -> StreakList:
+        return finder.detect_streaks(peaks, xtol, vmin)[0]
+
+    @pytest.mark.xfail(raises=IndexError)
+    def test_streak_list(self, result: StreakList):
+        return result[len(result)]
+
+    @pytest.fixture
+    def streak(self, rng: np.random.Generator, result: StreakList) -> Streak:
+        index = int(rng.integers(0, len(result)))
+        return result[index]
 
     def get_pixels(self, x: int, y: int, finder: PatternStreakFinder
                    ) -> Tuple[NDIntArray, NDIntArray]:
@@ -143,13 +151,20 @@ class TestStreakFinder():
         pts = pts[np.lexsort((pts[:, 1], pts[:, 0]))]
         assert np.all(np.stack([streak.x, streak.y], axis=-1) == pts)
 
-    def test_mask(self, result: StreakFinderResult, finder: PatternStreakFinder):
-        assert np.all((result.mask != -1) == finder.mask)
+    def test_mask(self, result: StreakList, finder: PatternStreakFinder):
+        for streak in result:
+            assert np.all(finder.mask[streak.y, streak.x])
 
-    def test_result_probability(self, result: StreakFinderResult, image: NDRealArray,
-                                mask: NDBoolArray, vmin: float):
+    def test_p_values(self, result: StreakList, image: NDRealArray,
+                     mask: NDBoolArray, xtol: float, vmin: float, min_size: int):
+        p_values, prob = p_value(result, image, mask ,xtol, vmin)
+        assert np.all(p_values < np.log(prob) * min_size)
+
+    def test_result_probability(self, result: StreakList, image: NDRealArray,
+                                mask: NDBoolArray, xtol: float, vmin: float):
+        _, prob = p_value(result, image, mask, xtol, vmin)
         index = np.searchsorted(np.sort(image[mask]), vmin)
-        check_close(1 - index / mask.sum(), np.asarray(result.probability(image, vmin)))
+        check_close(1 - index / mask.sum(), np.asarray(prob))
 
     def test_central_line(self, streak: Streak, image: NDRealArray):
         line = streak.line()
@@ -162,7 +177,7 @@ class TestStreakFinder():
         assert np.all(central_line == np.asarray(streak.central_line()))
 
     def test_negative_image(self, image: NDRealArray, mask: NDBoolArray, structure: Structure2D,
-                            min_size: int, peaks: Peaks, xtol: float):
+                            min_size: int, peaks: PeaksList, xtol: float):
         finder = PatternStreakFinder(-image, mask, structure, min_size)
-        result = finder.detect_streaks(peaks, xtol, 0.0)
-        assert len(result.streaks) == 0
+        streaks = finder.detect_streaks(peaks, xtol, 0.0)[0]
+        assert len(streaks) == 0
